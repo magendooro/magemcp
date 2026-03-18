@@ -93,5 +93,3 @@ tests/
 ## License
 
 MIT
-
-See [CLAUDE.md](CLAUDE.md) for the full project guide, architecture decisions, safety requirements, and development workflow.
