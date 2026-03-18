@@ -1,6 +1,6 @@
 # MageMCP
 
-MCP (Model Context Protocol) server for Magento 2 / Adobe Commerce. Connects AI agents to a Magento instance, enabling natural-language interaction with catalog, orders, customers, and inventory.
+MCP (Model Context Protocol) server for Magento 2 / Adobe Commerce by [Magendoo](https://magendoo.ro). Connects AI agents to a Magento instance, enabling natural-language interaction with catalog, orders, customers, and inventory.
 
 MageMCP runs as a separate Python service — not embedded in Magento. It communicates with Magento via REST and GraphQL APIs and exposes MCP tools to any MCP-compatible client.
 
@@ -89,6 +89,10 @@ tests/
 ├── test_get_inventory.py
 └── test_integration.py    # Integration tests (real Magento, auto-skips)
 ```
+
+## Customizations
+
+Need custom tools, integrations, or a tailored deployment for your Magento store? Contact us at [Magendoo](https://magendoo.ro) — [info@magendoo.ro](mailto:info@magendoo.ro).
 
 ## License
 
