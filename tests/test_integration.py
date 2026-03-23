@@ -314,12 +314,75 @@ class TestGetProduct:
 
 
 # ---------------------------------------------------------------------------
+# search_orders integration
+# ---------------------------------------------------------------------------
+
+
+class TestSearchOrders:
+    """Integration tests for admin_search_orders via REST API."""
+
+    async def test_search_orders_real(self, client: MagentoClient) -> None:
+        """Search orders returns results from real Magento."""
+        params = MagentoClient.search_params(
+            page_size=5, sort_field="created_at", sort_direction="DESC",
+        )
+        data = await client.get("/V1/orders", params=params)
+        assert "items" in data
+        if data["items"]:
+            order = data["items"][0]
+            assert "increment_id" in order
+            assert "customer_email" in order  # Full email, not masked
+            assert "grand_total" in order
+            log.info("Search orders: %d total, first=%s", data.get("total_count", 0), order["increment_id"])
+
+    async def test_tool_search_orders(self) -> None:
+        """admin_search_orders tool returns summaries."""
+        from magemcp.server import mcp as server
+
+        tools = server._tool_manager._tools
+        tool_fn = tools["admin_search_orders"].fn
+
+        result = await tool_fn(page_size=5)
+        assert "orders" in result
+        assert "total_count" in result
+        if result["orders"]:
+            first = result["orders"][0]
+            assert "increment_id" in first
+            assert "customer_email" in first
+            assert "total_items" in first
+            # Summaries should NOT have full order fields
+            assert "billing_address" not in first
+            assert "items" not in first
+            log.info(
+                "Tool admin_search_orders: %d total, first=%s (%s)",
+                result["total_count"], first["increment_id"], first["customer_email"],
+            )
+
+    async def test_tool_search_orders_by_status(self) -> None:
+        """admin_search_orders with status filter."""
+        from magemcp.server import mcp as server
+
+        tools = server._tool_manager._tools
+        tool_fn = tools["admin_search_orders"].fn
+
+        # Search for "pending" or whatever status exists
+        result = await tool_fn(page_size=3)
+        if not result["orders"]:
+            pytest.skip("No orders to filter")
+
+        known_status = result["orders"][0]["status"]
+        filtered = await tool_fn(status=known_status, page_size=50)
+        assert all(o["status"] == known_status for o in filtered["orders"])
+        log.info("Filtered by status=%s: %d orders", known_status, filtered["total_count"])
+
+
+# ---------------------------------------------------------------------------
 # get_order integration
 # ---------------------------------------------------------------------------
 
 
 class TestGetOrder:
-    """Integration tests for c_get_order via REST API."""
+    """Integration tests for admin_get_order via REST API."""
 
     async def test_get_existing_order(self, client: MagentoClient) -> None:
         """Fetch a real order by increment ID."""
@@ -571,7 +634,16 @@ class TestToolEndToEnd:
         assert isinstance(result, dict)
         assert result["increment_id"] == increment_id
         assert result["pii_mode"] == "full"
-        log.info("Tool admin_get_order: %s state=%s email=%s", result["increment_id"], result["state"], result.get("customer_email", "N/A"))
+        # Enhanced: payment info should be present
+        assert "payment_method" in result
+        assert "payment_additional" in result
+        assert "invoice_ids" in result
+        assert "credit_memo_ids" in result
+        log.info(
+            "Tool admin_get_order: %s state=%s payment=%s email=%s",
+            result["increment_id"], result["state"],
+            result.get("payment_method"), result.get("customer_email", "N/A"),
+        )
 
     async def test_tool_get_customer(self) -> None:
         """admin_get_customer returns full customer data."""

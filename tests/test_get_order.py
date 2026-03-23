@@ -152,6 +152,10 @@ def _make_rest_order(
         "billing_address": billing_address,
         "status_histories": status_histories,
         "extension_attributes": ext,
+        "payment": {
+            "method": "checkmo",
+            "additional_information": ["Check / Money order"],
+        },
     }
 
 
@@ -349,13 +353,14 @@ class TestParseShipments:
 
 
 class TestParseStatusHistory:
-    def test_limits_to_3(self) -> None:
+    def test_returns_all_entries(self) -> None:
+        """Admin view returns all status history entries."""
         raw = [
             {"comment": f"Comment {i}", "status": "processing", "created_at": f"2025-06-1{i}"}
             for i in range(5)
         ]
         result = _parse_status_history(raw)
-        assert len(result) == 3
+        assert len(result) == 5
         assert result[0].comment == "Comment 0"
 
     def test_empty(self) -> None:
@@ -461,6 +466,32 @@ class TestParseOrderFull:
         order = _make_rest_order(customer_firstname=None, customer_lastname=None)  # type: ignore[arg-type]
         result = parse_order(order)
         assert result.customer_name == "Unknown"
+
+    def test_payment_info(self) -> None:
+        order = _make_rest_order()
+        result = parse_order(order)
+        assert result.payment_method == "checkmo"
+        assert result.payment_additional == ["Check / Money order"]
+
+    def test_invoice_and_credit_memo_ids(self) -> None:
+        order = _make_rest_order()
+        # Add invoices and credit memos to extension_attributes
+        order["extension_attributes"]["invoices"] = [
+            {"entity_id": 1}, {"entity_id": 2},
+        ]
+        order["extension_attributes"]["credit_memos"] = [
+            {"entity_id": 10},
+        ]
+        result = parse_order(order)
+        assert result.invoice_ids == [1, 2]
+        assert result.credit_memo_ids == [10]
+
+    def test_no_payment(self) -> None:
+        order = _make_rest_order()
+        del order["payment"]
+        result = parse_order(order)
+        assert result.payment_method is None
+        assert result.payment_additional == []
 
 
 # ---------------------------------------------------------------------------

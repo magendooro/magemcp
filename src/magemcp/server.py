@@ -55,6 +55,10 @@ register_resolve_url(mcp)
 # Tool registration — admin namespace (REST)
 # ---------------------------------------------------------------------------
 
+from magemcp.tools.admin.search_orders import register_search_orders
+
+register_search_orders(mcp)
+
 from magemcp.tools.admin.get_order import register_get_order
 
 register_get_order(mcp)
