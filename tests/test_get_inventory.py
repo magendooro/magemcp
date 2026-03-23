@@ -1,4 +1,4 @@
-"""Tests for c_get_inventory tool."""
+"""Tests for admin_get_inventory tool."""
 
 from __future__ import annotations
 

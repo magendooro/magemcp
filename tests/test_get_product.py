@@ -13,7 +13,7 @@ from magemcp.models.catalog import (
     CGetProductInput,
     CGetProductOutput,
 )
-from magemcp.tools.get_product import (
+from magemcp.tools.customer.get_product import (
     _parse_categories,
     _parse_custom_attributes,
     _parse_media_gallery,

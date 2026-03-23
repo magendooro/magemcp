@@ -13,7 +13,7 @@ from magemcp.models.catalog import (
     CSearchProductsInput,
     strip_html,
 )
-from magemcp.tools.search_products import (
+from magemcp.tools.customer.search_products import (
     _build_variables,
     _parse_product,
     _parse_response,
@@ -183,7 +183,7 @@ class TestBuildVariables:
     def test_minimal(self) -> None:
         inp = CSearchProductsInput()
         variables = _build_variables(inp)
-        assert variables == {"pageSize": 20, "currentPage": 1}
+        assert variables == {"pageSize": 20, "currentPage": 1, "search": ""}
 
     def test_with_search(self) -> None:
         inp = CSearchProductsInput(search="jacket")
@@ -241,6 +241,12 @@ class TestBuildVariables:
         assert variables["currentPage"] == 2
         assert variables["filter"]["category_id"] == {"eq": "3"}
         assert variables["filter"]["price"] == {"from": "10.0", "to": "50.0"}
+
+    def test_filter_only_no_default_search(self) -> None:
+        """When a filter is provided, no default search should be added."""
+        inp = CSearchProductsInput(category_id="15")
+        variables = _build_variables(inp)
+        assert "search" not in variables
 
 
 # ---------------------------------------------------------------------------

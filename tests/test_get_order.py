@@ -1,4 +1,4 @@
-"""Tests for c_get_order tool."""
+"""Tests for admin_get_order tool."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from magemcp.models.order import (
     mask_phone,
     mask_street,
 )
-from magemcp.tools.get_order import (
+from magemcp.tools.admin.get_order import (
     _extract_shipping_address,
     _extract_shipping_method,
     _parse_address,
@@ -165,7 +165,7 @@ def _wrap_rest_response(items: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# PII masking helpers
+# PII masking helpers (still tested — they live in models/order.py)
 # ---------------------------------------------------------------------------
 
 
@@ -238,11 +238,6 @@ class TestInputValidation:
         inp = CGetOrderInput(increment_id="000000001")
         assert inp.increment_id == "000000001"
         assert inp.store_scope == "default"
-        assert inp.pii_mode == "redacted"
-
-    def test_full_pii_mode(self) -> None:
-        inp = CGetOrderInput(increment_id="000000001", pii_mode="full")
-        assert inp.pii_mode == "full"
 
     def test_empty_increment_id_rejected(self) -> None:
         with pytest.raises(Exception):
@@ -256,18 +251,14 @@ class TestInputValidation:
         with pytest.raises(Exception):
             CGetOrderInput(increment_id="000000001", store_scope="INVALID!")
 
-    def test_invalid_pii_mode(self) -> None:
-        with pytest.raises(Exception):
-            CGetOrderInput(increment_id="000000001", pii_mode="partial")  # type: ignore[arg-type]
-
 
 # ---------------------------------------------------------------------------
-# _parse_address
+# _parse_address (admin — always full)
 # ---------------------------------------------------------------------------
 
 
 class TestParseAddress:
-    def test_redacted(self) -> None:
+    def test_full_address(self) -> None:
         raw = {
             "firstname": "Jane",
             "lastname": "Doe",
@@ -278,36 +269,17 @@ class TestParseAddress:
             "country_id": "US",
             "telephone": "512-555-1234",
         }
-        result = _parse_address(raw, redact=True)
-        assert result is not None
-        assert result.city == "Austin"
-        assert result.region == "Texas"
-        assert result.country_id == "US"
-        assert result.street == ["[REDACTED]"]
-        assert result.telephone == "***-***-1234"
-        assert result.firstname is None
-        assert result.lastname is None
-
-    def test_full(self) -> None:
-        raw = {
-            "firstname": "Jane",
-            "lastname": "Doe",
-            "street": ["123 Main St"],
-            "city": "Austin",
-            "region": "Texas",
-            "postcode": "78701",
-            "country_id": "US",
-            "telephone": "512-555-1234",
-        }
-        result = _parse_address(raw, redact=False)
+        result = _parse_address(raw)
         assert result is not None
         assert result.street == ["123 Main St"]
         assert result.telephone == "512-555-1234"
         assert result.firstname == "Jane"
         assert result.lastname == "Doe"
+        assert result.city == "Austin"
+        assert result.country_id == "US"
 
     def test_none_input(self) -> None:
-        assert _parse_address(None, redact=True) is None
+        assert _parse_address(None) is None
 
 
 # ---------------------------------------------------------------------------
@@ -444,23 +416,23 @@ class TestExtractShippingAddress:
 
 
 # ---------------------------------------------------------------------------
-# parse_order — redacted mode
+# parse_order — admin always returns full data
 # ---------------------------------------------------------------------------
 
 
-class TestParseOrderRedacted:
-    def test_basic_redacted(self) -> None:
+class TestParseOrderFull:
+    def test_basic_full(self) -> None:
         order = _make_rest_order()
-        result = parse_order(order, redact=True)
+        result = parse_order(order)
 
         assert result.increment_id == "000000001"
         assert result.state == "processing"
         assert result.status == "processing"
-        assert result.pii_mode == "redacted"
+        assert result.pii_mode == "full"
 
-        # PII should be masked
-        assert result.customer_name == "J. D."
-        assert result.customer_email == "j***@e***.com"
+        # Full PII — not masked
+        assert result.customer_name == "Jane Doe"
+        assert result.customer_email == "jane.doe@example.com"
 
         # Totals
         assert result.grand_total == 129.99
@@ -471,44 +443,56 @@ class TestParseOrderRedacted:
         assert len(result.items) == 2
         assert result.items[0].sku == "WJ12-M-Blue"
 
-        # Addresses redacted
-        assert result.billing_address is not None
-        assert result.billing_address.street == ["[REDACTED]"]
-        assert result.billing_address.telephone == "***-***-1234"
-        assert result.billing_address.firstname is None
-
-        assert result.shipping_address is not None
-        assert result.shipping_address.street == ["[REDACTED]"]
-
-    def test_shipping_method(self) -> None:
-        order = _make_rest_order()
-        result = parse_order(order, redact=True)
-        assert result.shipping_method == "Flat Rate - Fixed"
-
-
-# ---------------------------------------------------------------------------
-# parse_order — full mode
-# ---------------------------------------------------------------------------
-
-
-class TestParseOrderFull:
-    def test_basic_full(self) -> None:
-        order = _make_rest_order()
-        result = parse_order(order, redact=False)
-
-        assert result.pii_mode == "full"
-        assert result.customer_name == "Jane Doe"
-        assert result.customer_email == "jane.doe@example.com"
-
+        # Addresses — full data
         assert result.billing_address is not None
         assert result.billing_address.street == ["123 Main St", "Apt 4"]
         assert result.billing_address.telephone == "512-555-1234"
         assert result.billing_address.firstname == "Jane"
 
+        assert result.shipping_address is not None
+        assert result.shipping_address.street == ["123 Main St", "Apt 4"]
+
+    def test_shipping_method(self) -> None:
+        order = _make_rest_order()
+        result = parse_order(order)
+        assert result.shipping_method == "Flat Rate - Fixed"
+
     def test_missing_customer_name(self) -> None:
         order = _make_rest_order(customer_firstname=None, customer_lastname=None)  # type: ignore[arg-type]
-        result = parse_order(order, redact=False)
+        result = parse_order(order)
         assert result.customer_name == "Unknown"
+
+
+# ---------------------------------------------------------------------------
+# Admin tool returns full PII — explicit verification
+# ---------------------------------------------------------------------------
+
+
+class TestAdminGetOrderReturnsFullPii:
+    def test_email_not_masked(self) -> None:
+        order = _make_rest_order(customer_email="jane.doe@example.com")
+        result = parse_order(order)
+        assert result.customer_email == "jane.doe@example.com"
+        assert "***" not in (result.customer_email or "")
+
+    def test_name_not_masked(self) -> None:
+        order = _make_rest_order(customer_firstname="Jane", customer_lastname="Doe")
+        result = parse_order(order)
+        assert result.customer_name == "Jane Doe"
+
+    def test_phone_not_masked(self) -> None:
+        order = _make_rest_order()
+        result = parse_order(order)
+        assert result.billing_address is not None
+        assert result.billing_address.telephone == "512-555-1234"
+
+    def test_address_not_masked(self) -> None:
+        order = _make_rest_order()
+        result = parse_order(order)
+        assert result.billing_address is not None
+        assert result.billing_address.street == ["123 Main St", "Apt 4"]
+        assert result.billing_address.firstname == "Jane"
+        assert result.billing_address.lastname == "Doe"
 
 
 # ---------------------------------------------------------------------------
@@ -527,7 +511,7 @@ class TestParseOrderWithShipments:
                 },
             ],
         )
-        result = parse_order(order, redact=True)
+        result = parse_order(order)
         assert len(result.shipments) == 1
         assert result.shipments[0].tracks[0].track_number == "1Z999AA10"
 
@@ -539,8 +523,8 @@ class TestParseOrderWithShipments:
 
 class TestToolEndToEnd:
     @respx.mock
-    async def test_get_order_redacted(self) -> None:
-        """Full tool invocation with mocked REST response, redacted mode."""
+    async def test_get_order_full(self) -> None:
+        """Full tool invocation — admin always returns full data."""
         order = _make_rest_order()
         rest_response = _wrap_rest_response([order])
         route = respx.get(f"{BASE_URL}/rest/default/V1/orders").mock(
@@ -557,33 +541,13 @@ class TestToolEndToEnd:
         items = data.get("items") or []
         assert len(items) == 1
 
-        result = parse_order(items[0], redact=True)
+        result = parse_order(items[0])
         assert result.increment_id == "000000001"
-        assert result.customer_email == "j***@e***.com"
-        assert route.called
-
-    @respx.mock
-    async def test_get_order_full(self) -> None:
-        """Full tool invocation with full PII mode."""
-        order = _make_rest_order()
-        rest_response = _wrap_rest_response([order])
-        respx.get(f"{BASE_URL}/rest/default/V1/orders").mock(
-            return_value=httpx.Response(200, json=rest_response),
-        )
-
-        async with MagentoClient(base_url=BASE_URL, token=TOKEN) as client:
-            data = await client.get(
-                "/V1/orders",
-                params=MagentoClient.search_params(
-                    filters={"increment_id": "000000001"}, page_size=1,
-                ),
-            )
-
-        result = parse_order(data["items"][0], redact=False)
         assert result.customer_email == "jane.doe@example.com"
         assert result.customer_name == "Jane Doe"
         assert result.billing_address is not None
         assert result.billing_address.firstname == "Jane"
+        assert route.called
 
     @respx.mock
     async def test_get_order_store_scope(self) -> None:
@@ -658,17 +622,17 @@ class TestOutputSerialization:
                 {"tracks": [{"track_number": "1Z999", "carrier_code": "ups", "title": "UPS"}]},
             ],
         )
-        result = parse_order(order, redact=True)
+        result = parse_order(order)
         dumped = result.model_dump(mode="json")
 
         assert isinstance(dumped, dict)
         assert dumped["increment_id"] == "000000001"
-        assert dumped["pii_mode"] == "redacted"
-        assert dumped["customer_name"] == "J. D."
-        assert dumped["customer_email"] == "j***@e***.com"
+        assert dumped["pii_mode"] == "full"
+        assert dumped["customer_name"] == "Jane Doe"
+        assert dumped["customer_email"] == "jane.doe@example.com"
         assert isinstance(dumped["items"], list)
         assert len(dumped["items"]) == 2
         assert dumped["items"][0]["sku"] == "WJ12-M-Blue"
-        assert dumped["billing_address"]["street"] == ["[REDACTED]"]
+        assert dumped["billing_address"]["street"] == ["123 Main St", "Apt 4"]
         assert len(dumped["shipments"]) == 1
         assert dumped["shipments"][0]["tracks"][0]["track_number"] == "1Z999"

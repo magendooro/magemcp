@@ -1,6 +1,8 @@
 """MageMCP — MCP server for Magento 2 / Adobe Commerce.
 
-Registers read-only MCP tools for catalog, orders, customers, and inventory.
+Dual-namespace tool registration:
+  c_*     — customer-facing operations via GraphQL (catalog, cart, account)
+  admin_* — admin operations via REST API (orders, customers, inventory)
 """
 
 from __future__ import annotations
@@ -14,34 +16,38 @@ log = logging.getLogger(__name__)
 mcp = FastMCP(
     "MageMCP",
     instructions=(
-        "You are connected to a Magento 2 instance via MageMCP. "
-        "Use the available tools to query and manage catalog, orders, "
-        "customers, and inventory. All operations are read-only unless "
-        "explicitly stated otherwise."
+        "MageMCP v2 — Magento 2 MCP Server with dual namespaces. "
+        "c_* tools: customer-facing operations via GraphQL (catalog, cart, account). "
+        "admin_* tools: admin operations via REST API (orders, customers, inventory "
+        "— full access, no PII masking). "
     ),
 )
 
 # ---------------------------------------------------------------------------
-# Tool registration
+# Tool registration — customer namespace (GraphQL)
 # ---------------------------------------------------------------------------
 
-from magemcp.tools.search_products import register_search_products
+from magemcp.tools.customer.search_products import register_search_products
 
 register_search_products(mcp)
 
-from magemcp.tools.get_product import register_get_product
+from magemcp.tools.customer.get_product import register_get_product
 
 register_get_product(mcp)
 
-from magemcp.tools.get_order import register_get_order
+# ---------------------------------------------------------------------------
+# Tool registration — admin namespace (REST)
+# ---------------------------------------------------------------------------
+
+from magemcp.tools.admin.get_order import register_get_order
 
 register_get_order(mcp)
 
-from magemcp.tools.get_customer import register_get_customer
+from magemcp.tools.admin.get_customer import register_get_customer
 
 register_get_customer(mcp)
 
-from magemcp.tools.get_inventory import register_get_inventory
+from magemcp.tools.admin.get_inventory import register_get_inventory
 
 register_get_inventory(mcp)
 
