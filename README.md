@@ -6,28 +6,35 @@ MageMCP runs as a separate Python service — not embedded in Magento. It commun
 
 ## Status
 
-**Phase 2 POC** — 5 read-only tools implemented and unit tested. Integration tests written and validated against a local Magento instance.
+**v2** — 5 read-only tools across dual namespaces, split REST/GraphQL clients, 274 tests passing against a real Magento instance.
 
-## Implemented Tools
+## Tools
 
-| Tool | Domain | Magento API | Description |
-|------|--------|-------------|-------------|
-| `c_search_products` | Catalog | GraphQL | Search storefront catalog with filters, pagination, sorting |
-| `c_get_product` | Catalog | GraphQL | Full product detail by SKU (images, categories, configurable options) |
-| `c_get_order` | Orders | REST | Order lookup by increment ID with PII redaction |
-| `c_get_customer` | Customers | REST | Customer lookup by ID or email with PII redaction |
-| `c_get_inventory` | Inventory | REST | Salable quantity and availability check for SKU(s) |
+MageMCP uses two namespaces reflecting different access contexts:
 
-All tools are read-only, enforce store scope, and use typed Pydantic input/output schemas. Order and customer tools redact PII by default (masked emails, initials, redacted addresses).
+### `c_*` — Customer-Facing (GraphQL, no auth required)
+
+| Tool | Description |
+|------|-------------|
+| `c_search_products` | Search storefront catalog with filters, pagination, sorting |
+| `c_get_product` | Full product detail by SKU (images, categories, configurable options) |
+
+### `admin_*` — Admin Operations (REST, requires admin token)
+
+| Tool | Description |
+|------|-------------|
+| `admin_get_order` | Order lookup by increment ID — full customer details, addresses, tracking |
+| `admin_get_customer` | Customer lookup by ID or email — full profile data |
+| `admin_get_inventory` | Salable quantity and availability check for SKU(s) |
+
+All tools are read-only, enforce store scope, and use typed Pydantic input/output schemas.
 
 ## Stack
 
 - Python 3.11+
 - FastMCP (official MCP Python SDK)
-- FastAPI + Uvicorn
 - httpx for async Magento API calls
 - Pydantic v2 for validation and DTOs
-- hatchling build system
 
 ## Quick Start
 
@@ -38,8 +45,8 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 
 # Set required environment variables
-export MAGENTO_BASE_URL=https://magento.example.com
-export MAGENTO_TOKEN=your-integration-token
+export MAGENTO_BASE_URL=http://127.0.0.1:8082
+export MAGEMCP_ADMIN_TOKEN=your-integration-token
 
 # Run the server (stdio transport)
 magemcp
@@ -47,7 +54,7 @@ magemcp
 # Run tests
 pytest
 
-# Run integration tests (requires real Magento instance)
+# Run integration tests (requires running Magento instance)
 pytest tests/test_integration.py -v
 ```
 
@@ -56,39 +63,64 @@ pytest tests/test_integration.py -v
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `MAGENTO_BASE_URL` | Yes | Base URL of Magento instance |
-| `MAGENTO_TOKEN` | Yes | Integration/admin Bearer token |
+| `MAGEMCP_ADMIN_TOKEN` | Yes (admin tools) | Integration/admin Bearer token for REST API |
+| `MAGENTO_CUSTOMER_TOKEN` | No | Customer token for authenticated GraphQL queries |
 | `MAGENTO_STORE_CODE` | No | Default store view code (default: `default`) |
+| `MAGENTO_TOKEN` | No | Legacy alias for `MAGEMCP_ADMIN_TOKEN` (backward compat) |
 
-## Project Structure
+## Architecture
 
 ```
 src/magemcp/
-├── server.py              # MCP server entry point (FastMCP, tool registration)
+├── server.py                  # MCP server entry point, dual-namespace registration
 ├── connectors/
-│   └── magento.py         # Async HTTP client (REST + GraphQL), error handling, searchCriteria builder
+│   ├── graphql_client.py      # GraphQLClient — storefront queries, no auth by default
+│   ├── rest_client.py         # RESTClient — admin operations, requires Bearer token
+│   ├── errors.py              # Shared exception hierarchy
+│   └── magento.py             # Backward-compatible unified client wrapper
 ├── tools/
-│   ├── search_products.py # c_search_products (GraphQL)
-│   ├── get_product.py     # c_get_product (GraphQL)
-│   ├── get_order.py       # c_get_order (REST, PII redaction)
-│   ├── get_customer.py    # c_get_customer (REST, PII redaction)
-│   └── get_inventory.py   # c_get_inventory (REST)
+│   ├── customer/              # c_* tools (GraphQL)
+│   │   ├── search_products.py
+│   │   └── get_product.py
+│   └── admin/                 # admin_* tools (REST)
+│       ├── get_order.py
+│       ├── get_customer.py
+│       └── get_inventory.py
 ├── models/
-│   ├── catalog.py         # Product, price, pagination DTOs
-│   ├── order.py           # Order DTOs, PII masking helpers
-│   ├── customer.py        # Customer DTOs
-│   └── inventory.py       # Inventory DTOs
-└── policy/                # Policy engine (stub — not yet implemented)
-
-tests/
-├── test_server.py         # Server smoke test
-├── test_connector.py      # Connector unit tests
-├── test_search_products.py
-├── test_get_product.py
-├── test_get_order.py
-├── test_get_customer.py
-├── test_get_inventory.py
-└── test_integration.py    # Integration tests (real Magento, auto-skips)
+│   ├── catalog.py             # Product, price, pagination DTOs
+│   ├── order.py               # Order DTOs, PII masking helpers
+│   ├── customer.py            # Customer DTOs
+│   └── inventory.py           # Inventory DTOs
+└── policy/                    # Policy engine (stub — not yet implemented)
 ```
+
+### Why Two Clients?
+
+| | GraphQLClient | RESTClient |
+|---|---|---|
+| **Auth** | None (guest) or customer token | Always admin Bearer token |
+| **Used by** | `c_*` tools | `admin_*` tools |
+| **Data scope** | Storefront-visible only | All data across all store views |
+| **Audience** | Shopping assistants, self-service bots | Support reps, ops teams |
+
+## Testing
+
+274 tests across 10 test files:
+
+```bash
+# Unit tests only (no Magento needed)
+pytest tests/ --ignore=tests/test_integration.py
+
+# Full suite with integration + comparison tests
+MAGENTO_BASE_URL=http://127.0.0.1:8082 \
+MAGENTO_TOKEN=your-token \
+pytest tests/ -v
+```
+
+Test types:
+- **Unit tests** — mocked HTTP via respx, test parsing, validation, error handling
+- **Integration tests** — real Magento API calls, auto-skip when not configured
+- **MCP vs raw API comparison tests** — fetch same data via tool and raw API, verify field-by-field match
 
 ## Customizations
 
