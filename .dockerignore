@@ -1,0 +1,38 @@
+# Version control
+.git
+.github
+
+# Python bytecode
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv
+venv
+
+# Environment files (secrets)
+.env
+.env.*
+
+# Caches
+.mypy_cache
+.ruff_cache
+.pytest_cache
+
+# Project metadata / research (not needed at runtime)
+research/
+.project/
+tests/
+docs/
+scripts/
+
+# Documentation — keep README.md (required by pyproject.toml build)
+CLAUDE.md
+
+# IDE / editor
+.claude/
+.mcp.json
+.vscode/
+.idea/

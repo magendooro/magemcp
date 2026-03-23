@@ -1,5 +1,7 @@
 # MageMCP POC Tool Specifications
 
+> **Note:** This is a design document. For the current implemented tools and their specifications, please refer to the `README.md` and `docs/features.md`.
+
 ## Namespace Design
 
 MageMCP tools are split into two namespaces reflecting fundamentally different access contexts:

@@ -1,33 +1,63 @@
 # MageMCP
 
-MCP (Model Context Protocol) server for Magento 2 / Adobe Commerce by [Magendoo](https://magendoo.ro). Connects AI agents to a Magento instance, enabling natural-language interaction with catalog, orders, customers, and inventory.
+MCP (Model Context Protocol) server for Magento 2 / Adobe Commerce by [Magendoo](https://magendoo.ro). Connects AI agents to a Magento instance, enabling natural-language interaction with catalog, orders, customers, inventory, and carts.
 
 MageMCP runs as a separate Python service — not embedded in Magento. It communicates with Magento via REST and GraphQL APIs and exposes MCP tools to any MCP-compatible client.
 
 ## Status
 
-**v2** — 5 read-only tools across dual namespaces, split REST/GraphQL clients, 274 tests passing against a real Magento instance.
+**v2.2** — 27 tools across dual namespaces, split REST/GraphQL clients, 394 tests passing against real Magento instances.
 
 ## Tools
 
 MageMCP uses two namespaces reflecting different access contexts:
 
-### `c_*` — Customer-Facing (GraphQL, no auth required)
+### `c_*` — Customer-Facing (GraphQL, no auth required by default)
+
+These tools mimic a storefront user or shopper.
 
 | Tool | Description |
 |------|-------------|
+| **Catalog & Navigation** | |
 | `c_search_products` | Search storefront catalog with filters, pagination, sorting |
 | `c_get_product` | Full product detail by SKU (images, categories, configurable options) |
+| `c_get_categories` | Fetch category tree with children and product counts |
+| `c_resolve_url` | Resolve SEO-friendly URLs to products, categories, or CMS pages |
+| `c_get_store_config` | Get store configuration (locale, currency, base URLs) |
+| **Cart & Checkout** | |
+| `c_create_cart` | Create an empty guest cart |
+| `c_get_cart` | Get full cart details (items, totals, addresses) |
+| `c_add_to_cart` | Add a product to the cart by SKU |
+| `c_update_cart_item` | Update item quantity or remove item |
+| `c_apply_coupon` | Apply a discount coupon code |
+| `c_set_guest_email` | Set email address for guest checkout |
+| `c_set_shipping_address` | Set shipping address |
+| `c_set_billing_address` | Set billing address |
+| `c_set_shipping_method` | Select a shipping method |
+| `c_set_payment_method` | Select a payment method |
+| `c_place_order` | Place the order (returns order number) |
 
 ### `admin_*` — Admin Operations (REST, requires admin token)
 
+These tools provide back-office capabilities.
+
 | Tool | Description |
 |------|-------------|
+| **Read Operations** | |
+| `admin_search_orders` | Search orders with filters (status, email, date range, total) |
 | `admin_get_order` | Order lookup by increment ID — full customer details, addresses, tracking |
 | `admin_get_customer` | Customer lookup by ID or email — full profile data |
 | `admin_get_inventory` | Salable quantity and availability check for SKU(s) |
+| **Write Operations** | |
+| `admin_cancel_order` | Cancel an order (requires confirmation) |
+| `admin_hold_order` | Put an order on hold (requires confirmation) |
+| `admin_unhold_order` | Release an order from hold (requires confirmation) |
+| `admin_add_order_comment` | Add a comment to order history |
+| `admin_create_invoice` | Create an invoice (capture payment) |
+| `admin_create_shipment` | Create a shipment (with optional tracking) |
+| `admin_send_order_email` | Resend order confirmation email |
 
-All tools are read-only, enforce store scope, and use typed Pydantic input/output schemas.
+All tools enforce store scope and use typed Pydantic input/output schemas.
 
 ## Stack
 
@@ -74,24 +104,32 @@ pytest tests/test_integration.py -v
 src/magemcp/
 ├── server.py                  # MCP server entry point, dual-namespace registration
 ├── connectors/
-│   ├── graphql_client.py      # GraphQLClient — storefront queries, no auth by default
-│   ├── rest_client.py         # RESTClient — admin operations, requires Bearer token
+│   ├── graphql_client.py      # GraphQLClient — storefront queries
+│   ├── rest_client.py         # RESTClient — admin operations
 │   ├── errors.py              # Shared exception hierarchy
 │   └── magento.py             # Backward-compatible unified client wrapper
 ├── tools/
 │   ├── customer/              # c_* tools (GraphQL)
-│   │   ├── search_products.py
-│   │   └── get_product.py
+│   │   ├── cart.py            # Cart management (create, add, checkout)
+│   │   ├── get_categories.py  # Category tree
+│   │   ├── get_product.py     # Product details
+│   │   ├── resolve_url.py     # URL resolver
+│   │   ├── search_products.py # Catalog search
+│   │   └── store_config.py    # Store configuration
 │   └── admin/                 # admin_* tools (REST)
-│       ├── get_order.py
 │       ├── get_customer.py
-│       └── get_inventory.py
+│       ├── get_inventory.py
+│       ├── get_order.py
+│       └── search_orders.py
 ├── models/
 │   ├── catalog.py             # Product, price, pagination DTOs
-│   ├── order.py               # Order DTOs, PII masking helpers
+│   ├── order.py               # Order DTOs
 │   ├── customer.py            # Customer DTOs
-│   └── inventory.py           # Inventory DTOs
-└── policy/                    # Policy engine (stub — not yet implemented)
+│   ├── inventory.py           # Inventory DTOs
+│   └── customer_ns/           # GraphQL-specific DTOs
+│       ├── cart.py
+│       └── categories.py
+└── policy/                    # Policy engine (stub)
 ```
 
 ### Why Two Clients?
@@ -105,7 +143,7 @@ src/magemcp/
 
 ## Testing
 
-274 tests across 10 test files:
+Comprehensive test suite:
 
 ```bash
 # Unit tests only (no Magento needed)

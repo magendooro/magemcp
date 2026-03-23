@@ -1,0 +1,36 @@
+# =============================================================================
+# MageMCP — Docker Compose
+# =============================================================================
+# Usage:
+#   cp .env.example .env   # fill in your Magento credentials
+#   docker compose up -d
+#   docker compose logs -f magemcp
+
+services:
+  magemcp:
+    build: .
+    env_file: .env
+    # stdio transport requires stdin to stay open
+    stdin_open: true
+    tty: true
+    # The container needs outbound network access to reach the Magento instance.
+    # Default bridge network is sufficient.
+    #
+    # When HTTP transport is added, expose the port:
+    #   ports:
+    #     - "8000:8000"
+
+  # Development profile — mounts source for live editing
+  # Usage: docker compose --profile dev up magemcp-dev
+  magemcp-dev:
+    build: .
+    env_file: .env
+    stdin_open: true
+    tty: true
+    volumes:
+      - ./src:/home/magemcp/src:ro
+      - ./pyproject.toml:/home/magemcp/pyproject.toml:ro
+      - ./README.md:/home/magemcp/README.md:ro
+    entrypoint: ["/bin/sh", "-c", "pip install --user -e /home/magemcp && magemcp"]
+    profiles:
+      - dev

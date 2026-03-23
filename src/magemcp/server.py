@@ -71,6 +71,10 @@ from magemcp.tools.admin.get_inventory import register_get_inventory
 
 register_get_inventory(mcp)
 
+from magemcp.tools.admin.order_actions import register_order_actions
+
+register_order_actions(mcp)
+
 
 def main() -> None:
     """Entry point for the MageMCP server."""
