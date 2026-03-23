@@ -620,3 +620,297 @@ class TestCrossToolScenarios:
             inv_result["items"][0]["salable_quantity"],
             inv_result["items"][0]["is_salable"],
         )
+
+
+# ---------------------------------------------------------------------------
+# MCP vs raw API comparison tests
+# ---------------------------------------------------------------------------
+
+
+class TestMcpVsRawApi:
+    """Compare MCP tool output against raw Magento API responses.
+
+    These tests fetch the same data via both the raw API and the MCP tool,
+    then verify that every field the tool exposes matches the source data.
+    Catches field mapping bugs, dropped data, and parsing regressions.
+    """
+
+    async def test_search_products_matches_graphql(self) -> None:
+        """c_search_products output matches raw GraphQL products query."""
+        from magemcp.server import mcp as server
+
+        tools = server._tool_manager._tools
+        tool_fn = tools["c_search_products"].fn
+
+        tool_result = await tool_fn(search="", page_size=5)
+        if not tool_result["products"]:
+            pytest.skip("No products in catalog")
+
+        # Fetch the same data via raw GraphQL
+        async with MagentoClient.from_config() as client:
+            raw = await client.graphql(
+                """
+                query {
+                  products(search: "", pageSize: 5) {
+                    total_count
+                    items {
+                      sku name url_key stock_status __typename
+                      price_range {
+                        minimum_price {
+                          regular_price { value currency }
+                          final_price { value currency }
+                        }
+                      }
+                    }
+                    page_info { current_page page_size total_pages }
+                  }
+                }
+                """
+            )
+
+        raw_products = raw["products"]
+
+        # Total count must match
+        assert tool_result["total_count"] == raw_products["total_count"]
+
+        # Page info must match
+        assert tool_result["page_info"]["current_page"] == raw_products["page_info"]["current_page"]
+        assert tool_result["page_info"]["page_size"] == raw_products["page_info"]["page_size"]
+
+        # Compare each product
+        for tool_prod, raw_prod in zip(tool_result["products"], raw_products["items"]):
+            assert tool_prod["sku"] == raw_prod["sku"], f"SKU mismatch"
+            assert tool_prod["name"] == raw_prod["name"], f"Name mismatch for {raw_prod['sku']}"
+            assert tool_prod["url_key"] == raw_prod["url_key"], f"url_key mismatch for {raw_prod['sku']}"
+            assert tool_prod["stock_status"] == raw_prod["stock_status"], f"stock_status mismatch for {raw_prod['sku']}"
+
+            # Price comparison
+            raw_min = raw_prod["price_range"]["minimum_price"]
+            assert float(tool_prod["min_price"]["regular_price"]["value"]) == raw_min["regular_price"]["value"]
+            assert float(tool_prod["min_price"]["final_price"]["value"]) == raw_min["final_price"]["value"]
+            assert tool_prod["min_price"]["regular_price"]["currency"] == raw_min["regular_price"]["currency"]
+
+        log.info(
+            "MCP vs GraphQL search: %d products compared, all fields match",
+            len(tool_result["products"]),
+        )
+
+    async def test_get_product_matches_graphql(self) -> None:
+        """c_get_product output matches raw GraphQL product detail query."""
+        async with MagentoClient.from_config() as client:
+            sku = await _discover_product_sku(client)
+        if sku is None:
+            pytest.skip("No products in catalog")
+
+        from magemcp.server import mcp as server
+
+        tools = server._tool_manager._tools
+        tool_fn = tools["c_get_product"].fn
+
+        tool_result = await tool_fn(sku=sku)
+
+        # Fetch same product via raw GraphQL
+        async with MagentoClient.from_config() as client:
+            raw = await client.graphql(
+                """
+                query($sku: String!) {
+                  products(filter: { sku: { eq: $sku } }) {
+                    items {
+                      sku name url_key stock_status __typename
+                      meta_title meta_description
+                      description { html }
+                      short_description { html }
+                      price_range {
+                        minimum_price {
+                          regular_price { value currency }
+                          final_price { value currency }
+                        }
+                      }
+                      media_gallery { url label position disabled }
+                      categories { name url_path }
+                    }
+                  }
+                }
+                """,
+                variables={"sku": sku},
+            )
+
+        raw_prod = raw["products"]["items"][0]
+
+        # Core fields
+        assert tool_result["sku"] == raw_prod["sku"]
+        assert tool_result["name"] == raw_prod["name"]
+        assert tool_result["url_key"] == raw_prod["url_key"]
+        assert tool_result["stock_status"] == raw_prod["stock_status"]
+        assert tool_result["meta_title"] == raw_prod.get("meta_title")
+        assert tool_result["meta_description"] == raw_prod.get("meta_description")
+
+        # Price
+        raw_min = raw_prod["price_range"]["minimum_price"]
+        assert float(tool_result["min_price"]["regular_price"]["value"]) == raw_min["regular_price"]["value"]
+        assert float(tool_result["min_price"]["final_price"]["value"]) == raw_min["final_price"]["value"]
+
+        # Images — tool filters disabled and sorts by position
+        raw_enabled = [img for img in (raw_prod.get("media_gallery") or []) if not img.get("disabled")]
+        assert len(tool_result["images"]) == len(raw_enabled)
+
+        # Categories
+        raw_cats = raw_prod.get("categories") or []
+        assert len(tool_result["categories"]) == len(raw_cats)
+        for tool_cat, raw_cat in zip(tool_result["categories"], raw_cats):
+            assert tool_cat["name"] == raw_cat["name"]
+
+        log.info("MCP vs GraphQL product: %s — all fields match", sku)
+
+    async def test_get_order_matches_rest(self) -> None:
+        """admin_get_order output matches raw REST order response."""
+        async with MagentoClient.from_config() as client:
+            increment_id = await _discover_order_increment_id(client)
+        if increment_id is None:
+            pytest.skip("No orders in the system")
+
+        from magemcp.server import mcp as server
+
+        tools = server._tool_manager._tools
+        tool_fn = tools["admin_get_order"].fn
+
+        tool_result = await tool_fn(increment_id=increment_id)
+
+        # Fetch same order via raw REST
+        async with MagentoClient.from_config() as client:
+            params = MagentoClient.search_params(
+                filters={"increment_id": increment_id}, page_size=1,
+            )
+            raw_data = await client.get("/V1/orders", params=params)
+
+        raw_order = raw_data["items"][0]
+
+        # Core order fields
+        assert tool_result["increment_id"] == str(raw_order["increment_id"])
+        assert tool_result["state"] == raw_order["state"]
+        assert tool_result["status"] == raw_order["status"]
+        assert tool_result["created_at"] == raw_order["created_at"]
+        assert tool_result["currency_code"] == raw_order.get("order_currency_code")
+
+        # Totals
+        assert tool_result["grand_total"] == raw_order["grand_total"]
+        assert tool_result["subtotal"] == raw_order["subtotal"]
+        assert tool_result["tax_amount"] == raw_order["tax_amount"]
+        assert tool_result["shipping_amount"] == raw_order.get("shipping_amount", 0)
+        assert tool_result["total_qty_ordered"] == raw_order["total_qty_ordered"]
+
+        # Customer info — admin returns full PII
+        assert tool_result["pii_mode"] == "full"
+        assert tool_result["customer_email"] == raw_order.get("customer_email")
+        firstname = raw_order.get("customer_firstname") or ""
+        lastname = raw_order.get("customer_lastname") or ""
+        expected_name = f"{firstname} {lastname}".strip() or "Unknown"
+        assert tool_result["customer_name"] == expected_name
+
+        # Line items — tool skips child items of configurables
+        raw_parent_items = [i for i in raw_order["items"] if not i.get("parent_item_id")]
+        assert len(tool_result["items"]) == len(raw_parent_items)
+        for tool_item, raw_item in zip(tool_result["items"], raw_parent_items):
+            assert tool_item["sku"] == raw_item["sku"]
+            assert tool_item["name"] == raw_item["name"]
+            assert tool_item["qty_ordered"] == raw_item["qty_ordered"]
+            assert tool_item["price"] == raw_item["price"]
+
+        # Billing address
+        if raw_order.get("billing_address"):
+            assert tool_result["billing_address"] is not None
+            assert tool_result["billing_address"]["city"] == raw_order["billing_address"].get("city")
+            assert tool_result["billing_address"]["country_id"] == raw_order["billing_address"].get("country_id")
+            assert tool_result["billing_address"]["telephone"] == raw_order["billing_address"].get("telephone")
+            assert tool_result["billing_address"]["street"] == raw_order["billing_address"].get("street")
+
+        log.info(
+            "MCP vs REST order: %s — %d fields + %d items compared, all match",
+            increment_id,
+            10,
+            len(tool_result["items"]),
+        )
+
+    async def test_get_customer_matches_rest(self) -> None:
+        """admin_get_customer output matches raw REST customer response."""
+        async with MagentoClient.from_config() as client:
+            customer_id = await _discover_customer_id(client)
+        if customer_id is None:
+            pytest.skip("No customers in the system")
+
+        from magemcp.server import mcp as server
+
+        tools = server._tool_manager._tools
+        tool_fn = tools["admin_get_customer"].fn
+
+        tool_result = await tool_fn(customer_id=customer_id)
+
+        # Fetch same customer via raw REST
+        async with MagentoClient.from_config() as client:
+            raw = await client.get(f"/V1/customers/{customer_id}")
+
+        # Core fields
+        assert tool_result["customer_id"] == raw["id"]
+        assert tool_result["group_id"] == raw.get("group_id")
+        assert tool_result["store_id"] == raw.get("store_id")
+        assert tool_result["website_id"] == raw.get("website_id")
+        assert tool_result["created_at"] == raw.get("created_at")
+        assert tool_result["updated_at"] == raw.get("updated_at")
+
+        # PII — admin returns full
+        assert tool_result["pii_mode"] == "full"
+        assert tool_result["firstname"] == raw.get("firstname")
+        assert tool_result["lastname"] == raw.get("lastname")
+        assert tool_result["email"] == raw.get("email")
+        assert tool_result["dob"] == raw.get("dob")
+        assert tool_result["gender"] == raw.get("gender")
+
+        log.info(
+            "MCP vs REST customer: id=%d (%s %s) — all fields match",
+            customer_id,
+            tool_result["firstname"],
+            tool_result["lastname"],
+        )
+
+    async def test_get_inventory_matches_rest(self) -> None:
+        """admin_get_inventory output matches raw REST inventory endpoints."""
+        async with MagentoClient.from_config() as client:
+            sku = await _discover_product_sku(client)
+        if sku is None:
+            pytest.skip("No products in catalog")
+
+        from magemcp.server import mcp as server
+
+        tools = server._tool_manager._tools
+        tool_fn = tools["admin_get_inventory"].fn
+
+        try:
+            tool_result = await tool_fn(skus=[sku])
+        except MagentoError:
+            pytest.skip("MSI inventory endpoints not available")
+
+        tool_item = tool_result["items"][0]
+
+        # Fetch same data via raw REST
+        async with MagentoClient.from_config() as client:
+            try:
+                raw_qty = await client.get(
+                    f"/V1/inventory/get-product-salable-quantity/{sku}/1"
+                )
+                raw_salable = await client.get(
+                    f"/V1/inventory/is-product-salable/{sku}/1"
+                )
+            except MagentoError:
+                pytest.skip("MSI inventory endpoints not available")
+
+        assert tool_item["sku"] == sku
+        assert tool_item["salable_quantity"] == float(raw_qty)
+        assert tool_item["is_salable"] == bool(raw_salable)
+        assert tool_item["stock_id"] == 1
+
+        log.info(
+            "MCP vs REST inventory: %s qty=%s salable=%s — match",
+            sku,
+            tool_item["salable_quantity"],
+            tool_item["is_salable"],
+        )
