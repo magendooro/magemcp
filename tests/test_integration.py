@@ -621,6 +621,88 @@ class TestToolEndToEnd:
 # ---------------------------------------------------------------------------
 
 
+class TestStoreConfig:
+    """Integration tests for c_get_store_config."""
+
+    async def test_store_config_real(self, client: MagentoClient) -> None:
+        """storeConfig returns locale and currency from real Magento."""
+        data = await client.graphql("{ storeConfig { locale base_currency_code store_code store_name } }")
+        config = data["storeConfig"]
+        assert config["locale"]
+        assert config["base_currency_code"]
+        assert config["store_code"]
+        log.info("Store config: %s (%s), currency=%s", config["store_name"], config["locale"], config["base_currency_code"])
+
+    async def test_tool_store_config(self) -> None:
+        """c_get_store_config tool returns config from real Magento."""
+        from magemcp.server import mcp as server
+
+        tools = server._tool_manager._tools
+        tool_fn = tools["c_get_store_config"].fn
+
+        result = await tool_fn()
+        assert result["locale"]
+        assert result["base_currency_code"]
+        assert result["store_code"]
+        assert result["base_url"]
+        log.info("Tool c_get_store_config: locale=%s currency=%s", result["locale"], result["base_currency_code"])
+
+
+class TestResolveUrl:
+    """Integration tests for c_resolve_url."""
+
+    async def test_resolve_product_url_real(self, client: MagentoClient) -> None:
+        """Resolve a real product URL from the catalog."""
+        data = await client.graphql(
+            '{ products(search: "", pageSize: 1) { items { url_key } } }'
+        )
+        items = data.get("products", {}).get("items", [])
+        if not items:
+            pytest.skip("No products in catalog")
+
+        url_key = items[0]["url_key"]
+        route_data = await client.graphql(
+            "query($url: String!) { route(url: $url) { __typename ... on SimpleProduct { sku name } } }",
+            variables={"url": f"{url_key}.html"},
+        )
+        route = route_data.get("route")
+        assert route is not None, f"Route not found for {url_key}.html"
+        assert "Product" in route["__typename"]
+        log.info("Resolved %s.html -> %s (sku=%s)", url_key, route["__typename"], route.get("sku"))
+
+    async def test_resolve_cms_home_page(self, client: MagentoClient) -> None:
+        """Resolve the CMS home page."""
+        data = await client.graphql(
+            'query($url: String!) { route(url: $url) { __typename ... on CmsPage { identifier title } } }',
+            variables={"url": "home"},
+        )
+        route = data.get("route")
+        assert route is not None
+        assert route["__typename"] == "CmsPage"
+        assert route["identifier"] == "home"
+        log.info("Resolved 'home' -> CmsPage (title=%s)", route.get("title"))
+
+    async def test_resolve_nonexistent_url(self, client: MagentoClient) -> None:
+        """Nonexistent URL returns null route."""
+        data = await client.graphql(
+            'query($url: String!) { route(url: $url) { __typename } }',
+            variables={"url": "nonexistent-page-xyz-123"},
+        )
+        assert data.get("route") is None
+
+    async def test_tool_resolve_url(self) -> None:
+        """c_resolve_url tool resolves CMS home page."""
+        from magemcp.server import mcp as server
+
+        tools = server._tool_manager._tools
+        tool_fn = tools["c_resolve_url"].fn
+
+        result = await tool_fn(url="home")
+        assert result["type"] == "CmsPage"
+        assert result["identifier"] == "home"
+        log.info("Tool c_resolve_url: home -> %s", result["type"])
+
+
 class TestCartCheckoutFlow:
     """Full guest checkout flow against real Magento."""
 

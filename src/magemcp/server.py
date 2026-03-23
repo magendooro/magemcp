@@ -43,6 +43,14 @@ from magemcp.tools.customer.cart import register_cart_tools
 
 register_cart_tools(mcp)
 
+from magemcp.tools.customer.store_config import register_store_config
+
+register_store_config(mcp)
+
+from magemcp.tools.customer.resolve_url import register_resolve_url
+
+register_resolve_url(mcp)
+
 # ---------------------------------------------------------------------------
 # Tool registration — admin namespace (REST)
 # ---------------------------------------------------------------------------
