@@ -35,6 +35,10 @@ from magemcp.tools.customer.get_product import register_get_product
 
 register_get_product(mcp)
 
+from magemcp.tools.customer.get_categories import register_get_categories
+
+register_get_categories(mcp)
+
 # ---------------------------------------------------------------------------
 # Tool registration — admin namespace (REST)
 # ---------------------------------------------------------------------------

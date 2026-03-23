@@ -192,6 +192,69 @@ class TestSearchProducts:
 
 
 # ---------------------------------------------------------------------------
+# get_categories integration
+# ---------------------------------------------------------------------------
+
+
+class TestGetCategories:
+    """Integration tests for c_get_categories via direct GraphQL calls."""
+
+    async def test_categories_returns_tree(self, client: MagentoClient) -> None:
+        """Verify category tree loads from real Magento."""
+        data = await client.graphql(
+            """
+            query {
+              categories(pageSize: 10, currentPage: 1) {
+                total_count
+                items {
+                  uid name url_key level product_count include_in_menu
+                  children { uid name level }
+                }
+                page_info { current_page page_size total_pages }
+              }
+            }
+            """
+        )
+        cats = data["categories"]
+        assert cats["total_count"] >= 1
+        root = cats["items"][0]
+        assert root["name"]  # Not empty
+        assert isinstance(root.get("children", []), list)
+        log.info(
+            "Categories: %d total, root=%s with %d children",
+            cats["total_count"],
+            root["name"],
+            len(root.get("children", [])),
+        )
+
+    async def test_categories_with_children(self, client: MagentoClient) -> None:
+        """Verify nested children are returned."""
+        data = await client.graphql(
+            """
+            query {
+              categories(pageSize: 50) {
+                items {
+                  uid name level
+                  children {
+                    uid name level
+                    children { uid name level }
+                  }
+                }
+              }
+            }
+            """
+        )
+        items = data["categories"]["items"]
+        # Find any category with children
+        has_children = any(
+            len(item.get("children") or []) > 0 for item in items
+        )
+        if not has_children:
+            pytest.skip("No categories with children found")
+        log.info("Found categories with nested children")
+
+
+# ---------------------------------------------------------------------------
 # get_product integration
 # ---------------------------------------------------------------------------
 
@@ -452,6 +515,27 @@ class TestToolEndToEnd:
         assert isinstance(result["products"], list)
         log.info("Tool c_search_products: %d total, %d returned", result["total_count"], len(result["products"]))
 
+    async def test_tool_get_categories(self) -> None:
+        """c_get_categories returns a valid category tree."""
+        from magemcp.server import mcp as server
+
+        tools = server._tool_manager._tools
+        tool_fn = tools["c_get_categories"].fn
+
+        result = await tool_fn(page_size=10)
+        assert isinstance(result, dict)
+        assert "total_count" in result
+        assert "categories" in result
+        assert isinstance(result["categories"], list)
+        assert result["total_count"] >= 1
+        # First category should have a name
+        assert result["categories"][0]["name"]
+        log.info(
+            "Tool c_get_categories: %d total, root=%s",
+            result["total_count"],
+            result["categories"][0]["name"],
+        )
+
     async def test_tool_get_product(self) -> None:
         """c_get_product returns detail for a discovered SKU."""
         # Discover a SKU first
@@ -634,6 +718,58 @@ class TestMcpVsRawApi:
     then verify that every field the tool exposes matches the source data.
     Catches field mapping bugs, dropped data, and parsing regressions.
     """
+
+    async def test_get_categories_matches_graphql(self) -> None:
+        """c_get_categories output matches raw GraphQL categories query."""
+        from magemcp.server import mcp as server
+
+        tools = server._tool_manager._tools
+        tool_fn = tools["c_get_categories"].fn
+
+        tool_result = await tool_fn(page_size=10)
+        if not tool_result["categories"]:
+            pytest.skip("No categories in Magento")
+
+        # Fetch same data via raw GraphQL
+        async with MagentoClient.from_config() as client:
+            raw = await client.graphql(
+                """
+                query {
+                  categories(pageSize: 10, currentPage: 1) {
+                    total_count
+                    items {
+                      uid name url_key url_path position level product_count include_in_menu
+                      children { uid name }
+                    }
+                    page_info { current_page page_size total_pages }
+                  }
+                }
+                """
+            )
+
+        raw_cats = raw["categories"]
+
+        assert tool_result["total_count"] == raw_cats["total_count"]
+        assert tool_result["page_info"]["current_page"] == raw_cats["page_info"]["current_page"]
+
+        for tool_cat, raw_cat in zip(tool_result["categories"], raw_cats["items"]):
+            assert tool_cat["uid"] == raw_cat["uid"], f"UID mismatch"
+            assert tool_cat["name"] == raw_cat["name"], f"Name mismatch for {raw_cat['uid']}"
+            assert tool_cat["url_key"] == raw_cat.get("url_key")
+            assert tool_cat["level"] == raw_cat.get("level")
+            assert tool_cat["product_count"] == raw_cat.get("product_count", 0)
+
+            # Children count
+            tool_children = tool_cat.get("children") or []
+            raw_children = raw_cat.get("children") or []
+            assert len(tool_children) == len(raw_children), (
+                f"Children count mismatch for {raw_cat['name']}"
+            )
+
+        log.info(
+            "MCP vs GraphQL categories: %d categories compared, all fields match",
+            len(tool_result["categories"]),
+        )
 
     async def test_search_products_matches_graphql(self) -> None:
         """c_search_products output matches raw GraphQL products query."""
