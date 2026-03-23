@@ -621,6 +621,85 @@ class TestToolEndToEnd:
 # ---------------------------------------------------------------------------
 
 
+class TestCartCheckoutFlow:
+    """Full guest checkout flow against real Magento."""
+
+    async def test_full_checkout_flow(self) -> None:
+        """Create cart -> add item -> set addresses -> set payment -> place order."""
+        from magemcp.server import mcp as server
+
+        tools = server._tool_manager._tools
+
+        # Discover a real simple product SKU
+        async with MagentoClient.from_config() as client:
+            sku = await _discover_product_sku(client)
+        if sku is None:
+            pytest.skip("No products in catalog")
+
+        # 1. Create cart
+        create_fn = tools["c_create_cart"].fn
+        cart_result = await create_fn()
+        cart_id = cart_result["cart_id"]
+        assert cart_id
+        log.info("Created cart: %s", cart_id)
+
+        # 2. Add product
+        add_fn = tools["c_add_to_cart"].fn
+        add_result = await add_fn(cart_id=cart_id, sku=sku, quantity=1)
+        assert "error" not in add_result, f"Add to cart failed: {add_result}"
+        assert len(add_result["items"]) >= 1
+        log.info("Added %s to cart, %d items", sku, len(add_result["items"]))
+
+        # 3. Set guest email
+        email_fn = tools["c_set_guest_email"].fn
+        email_result = await email_fn(cart_id=cart_id, email="integration-test@example.com")
+        assert email_result["email"] == "integration-test@example.com"
+
+        # 4. Set shipping address
+        ship_addr_fn = tools["c_set_shipping_address"].fn
+        ship_result = await ship_addr_fn(
+            cart_id=cart_id,
+            firstname="Test", lastname="User",
+            street=["123 Main St"], city="Austin", region="TX",
+            postcode="78701", country_code="US", telephone="5551234567",
+        )
+        assert ship_result["shipping_addresses"]
+        log.info("Shipping address set, methods available: %d",
+                 len(ship_result["shipping_addresses"][0].get("available_shipping_methods", [])))
+
+        # 5. Set billing address
+        bill_addr_fn = tools["c_set_billing_address"].fn
+        await bill_addr_fn(
+            cart_id=cart_id,
+            firstname="Test", lastname="User",
+            street=["123 Main St"], city="Austin", region="TX",
+            postcode="78701", country_code="US", telephone="5551234567",
+        )
+
+        # 6. Set shipping method
+        ship_method_fn = tools["c_set_shipping_method"].fn
+        await ship_method_fn(
+            cart_id=cart_id, carrier_code="flatrate", method_code="flatrate",
+        )
+
+        # 7. Set payment method
+        pay_fn = tools["c_set_payment_method"].fn
+        await pay_fn(cart_id=cart_id, payment_method_code="checkmo")
+
+        # 8. Verify cart state before placing order
+        get_fn = tools["c_get_cart"].fn
+        cart = await get_fn(cart_id=cart_id)
+        assert len(cart["items"]) >= 1
+        assert cart["email"] == "integration-test@example.com"
+
+        # 9. Place order
+        place_fn = tools["c_place_order"].fn
+        order_result = await place_fn(cart_id=cart_id)
+        assert "error" not in order_result, f"Place order failed: {order_result}"
+        assert order_result["order_number"]
+        log.info("Order placed: %s", order_result["order_number"])
+
+
 class TestCrossToolScenarios:
     """End-to-end scenarios that chain multiple tools together."""
 
