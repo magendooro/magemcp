@@ -10,7 +10,7 @@ MageMCP tools are split into two namespaces reflecting fundamentally different a
 - **Data scope**: All products, orders, customers across all store views
 - **Visibility**: Internal/operational data including disabled products, all order statuses, customer records
 - **Audience**: Support reps, ops teams, back-office agents
-- **PII handling**: All responses use redacted DTOs — raw Magento objects are never returned
+- **PII handling**: Full data returned (no redaction) — admin tools always return complete customer details, addresses, and contact info
 - **Transport**: REST API with `searchCriteria` for list operations
 
 ### `c_*` — Customer-Facing / Storefront
