@@ -1,4 +1,4 @@
-"""c_get_inventory — check salable quantity for SKU(s) via Magento REST API."""
+"""admin_get_inventory — check salable quantity for SKU(s) via Magento REST API."""
 
 from __future__ import annotations
 
@@ -19,10 +19,10 @@ log = logging.getLogger(__name__)
 
 
 def register_get_inventory(mcp: FastMCP) -> None:
-    """Register the c_get_inventory tool on the given MCP server."""
+    """Register the admin_get_inventory tool on the given MCP server."""
 
     @mcp.tool(
-        name="c_get_inventory",
+        name="admin_get_inventory",
         description=(
             "Check salable quantity and availability for one or more product SKUs. "
             "Uses Magento's inventory salable-quantity endpoints which account for "
@@ -34,7 +34,7 @@ def register_get_inventory(mcp: FastMCP) -> None:
             "openWorldHint": True,
         },
     )
-    async def c_get_inventory(
+    async def admin_get_inventory(
         skus: list[str],
         stock_id: int = 1,
         store_scope: str = "default",
@@ -43,7 +43,7 @@ def register_get_inventory(mcp: FastMCP) -> None:
         inp = CGetInventoryInput(skus=skus, stock_id=stock_id, store_scope=store_scope)
 
         log.info(
-            "c_get_inventory skus=%s stock_id=%d store=%s",
+            "admin_get_inventory skus=%s stock_id=%d store=%s",
             inp.skus,
             inp.stock_id,
             inp.store_scope,

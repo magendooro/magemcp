@@ -1,4 +1,4 @@
-"""c_get_order — fetch an order by increment ID via Magento REST API."""
+"""admin_get_order — fetch an order by increment ID via Magento REST API."""
 
 from __future__ import annotations
 
@@ -16,10 +16,6 @@ from magemcp.models.order import (
     ShipmentSummary,
     ShipmentTrack,
     StatusHistoryEntry,
-    mask_email,
-    mask_name,
-    mask_phone,
-    mask_street,
 )
 
 log = logging.getLogger(__name__)
@@ -29,26 +25,10 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def _parse_address(
-    raw: dict[str, Any] | None,
-    *,
-    redact: bool,
-) -> OrderAddress | None:
-    """Parse a Magento address object, optionally redacting PII."""
+def _parse_address(raw: dict[str, Any] | None) -> OrderAddress | None:
+    """Parse a Magento address object — always returns full data."""
     if not raw:
         return None
-
-    if redact:
-        return OrderAddress(
-            city=raw.get("city"),
-            region=raw.get("region"),
-            postcode=raw.get("postcode"),
-            country_id=raw.get("country_id"),
-            street=mask_street(raw.get("street")),
-            telephone=mask_phone(raw.get("telephone")),
-            firstname=None,
-            lastname=None,
-        )
 
     return OrderAddress(
         city=raw.get("city"),
@@ -160,8 +140,11 @@ def _parse_status_history(
 # ---------------------------------------------------------------------------
 
 
-def parse_order(order: dict[str, Any], *, redact: bool) -> CGetOrderOutput:
-    """Transform a raw Magento REST order into a CGetOrderOutput."""
+def parse_order(order: dict[str, Any]) -> CGetOrderOutput:
+    """Transform a raw Magento REST order into a CGetOrderOutput.
+
+    Admin tools always return full data — no PII redaction.
+    """
     billing = order.get("billing_address")
     shipping = _extract_shipping_address(order)
 
@@ -169,13 +152,8 @@ def parse_order(order: dict[str, Any], *, redact: bool) -> CGetOrderOutput:
     lastname = order.get("customer_lastname")
     email = order.get("customer_email")
 
-    if redact:
-        customer_name = mask_name(firstname, lastname)
-        customer_email = mask_email(email)
-    else:
-        parts = [p for p in [firstname, lastname] if p]
-        customer_name = " ".join(parts) if parts else "Unknown"
-        customer_email = email
+    parts = [p for p in [firstname, lastname] if p]
+    customer_name = " ".join(parts) if parts else "Unknown"
 
     return CGetOrderOutput(
         increment_id=order.get("increment_id", ""),
@@ -184,7 +162,7 @@ def parse_order(order: dict[str, Any], *, redact: bool) -> CGetOrderOutput:
         created_at=order.get("created_at", ""),
         updated_at=order.get("updated_at"),
         customer_name=customer_name,
-        customer_email=customer_email,
+        customer_email=email,
         grand_total=order.get("grand_total", 0),
         subtotal=order.get("subtotal", 0),
         tax_amount=order.get("tax_amount", 0),
@@ -193,12 +171,12 @@ def parse_order(order: dict[str, Any], *, redact: bool) -> CGetOrderOutput:
         currency_code=order.get("order_currency_code"),
         total_qty_ordered=order.get("total_qty_ordered", 0),
         items=_parse_items(order.get("items") or []),
-        billing_address=_parse_address(billing, redact=redact),
-        shipping_address=_parse_address(shipping, redact=redact),
+        billing_address=_parse_address(billing),
+        shipping_address=_parse_address(shipping),
         shipping_method=_extract_shipping_method(order),
         shipments=_parse_shipments(order),
         status_history=_parse_status_history(order.get("status_histories") or []),
-        pii_mode="redacted" if redact else "full",
+        pii_mode="full",
     )
 
 
@@ -208,14 +186,14 @@ def parse_order(order: dict[str, Any], *, redact: bool) -> CGetOrderOutput:
 
 
 def register_get_order(mcp: FastMCP) -> None:
-    """Register the c_get_order tool on the given MCP server."""
+    """Register the admin_get_order tool on the given MCP server."""
 
     @mcp.tool(
-        name="c_get_order",
+        name="admin_get_order",
         description=(
-            "Fetch an order by its customer-facing increment ID. Returns order status, "
-            "totals, line items, shipment tracking, and recent comments. "
-            "Customer PII (email, phone, addresses) is redacted by default."
+            "Fetch an order by its increment ID. Returns order status, "
+            "totals, line items, shipment tracking, recent comments, "
+            "and full customer details (name, email, phone, addresses)."
         ),
         annotations={
             "readOnlyHint": True,
@@ -223,25 +201,21 @@ def register_get_order(mcp: FastMCP) -> None:
             "openWorldHint": True,
         },
     )
-    async def c_get_order(
+    async def admin_get_order(
         increment_id: str,
         store_scope: str = "default",
-        pii_mode: str = "redacted",
     ) -> dict[str, Any]:
-        """Get an order by increment ID."""
+        """Get an order by increment ID — full admin view."""
         inp = CGetOrderInput(
             increment_id=increment_id,
             store_scope=store_scope,
-            pii_mode=pii_mode,  # type: ignore[arg-type]
+            pii_mode="full",
         )
 
-        redact = inp.pii_mode == "redacted"
-
         log.info(
-            "c_get_order increment_id=%s store=%s pii_mode=%s",
+            "admin_get_order increment_id=%s store=%s",
             inp.increment_id,
             inp.store_scope,
-            inp.pii_mode,
         )
 
         params = MagentoClient.search_params(
@@ -260,5 +234,5 @@ def register_get_order(mcp: FastMCP) -> None:
         if not items:
             return {"error": f"Order '{inp.increment_id}' not found."}
 
-        result = parse_order(items[0], redact=redact)
+        result = parse_order(items[0])
         return result.model_dump(mode="json")

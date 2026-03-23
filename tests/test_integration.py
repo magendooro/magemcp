@@ -472,7 +472,7 @@ class TestToolEndToEnd:
         log.info("Tool c_get_product: %s — %s", result["sku"], result["name"])
 
     async def test_tool_get_order(self) -> None:
-        """c_get_order returns a redacted order view."""
+        """admin_get_order returns full order data."""
         async with MagentoClient.from_config() as client:
             increment_id = await _discover_order_increment_id(client)
         if increment_id is None:
@@ -481,35 +481,16 @@ class TestToolEndToEnd:
         from magemcp.server import mcp as server
 
         tools = server._tool_manager._tools
-        tool_fn = tools["c_get_order"].fn
+        tool_fn = tools["admin_get_order"].fn
 
         result = await tool_fn(increment_id=increment_id)
         assert isinstance(result, dict)
         assert result["increment_id"] == increment_id
-        assert result["pii_mode"] == "redacted"
-        # Verify PII is masked in default mode
-        if result.get("customer_email"):
-            assert "***" in result["customer_email"]
-        log.info("Tool c_get_order: %s state=%s pii=%s", result["increment_id"], result["state"], result["pii_mode"])
-
-    async def test_tool_get_order_full_pii(self) -> None:
-        """c_get_order with pii_mode=full returns unmasked data."""
-        async with MagentoClient.from_config() as client:
-            increment_id = await _discover_order_increment_id(client)
-        if increment_id is None:
-            pytest.skip("No orders in the system")
-
-        from magemcp.server import mcp as server
-
-        tools = server._tool_manager._tools
-        tool_fn = tools["c_get_order"].fn
-
-        result = await tool_fn(increment_id=increment_id, pii_mode="full")
         assert result["pii_mode"] == "full"
-        log.info("Tool c_get_order (full): %s email=%s", result["increment_id"], result.get("customer_email", "N/A"))
+        log.info("Tool admin_get_order: %s state=%s email=%s", result["increment_id"], result["state"], result.get("customer_email", "N/A"))
 
     async def test_tool_get_customer(self) -> None:
-        """c_get_customer returns a redacted customer view."""
+        """admin_get_customer returns full customer data."""
         async with MagentoClient.from_config() as client:
             customer_id = await _discover_customer_id(client)
         if customer_id is None:
@@ -518,16 +499,16 @@ class TestToolEndToEnd:
         from magemcp.server import mcp as server
 
         tools = server._tool_manager._tools
-        tool_fn = tools["c_get_customer"].fn
+        tool_fn = tools["admin_get_customer"].fn
 
         result = await tool_fn(customer_id=customer_id)
         assert isinstance(result, dict)
         assert result["customer_id"] == customer_id
-        assert result["pii_mode"] == "redacted"
-        log.info("Tool c_get_customer: id=%d name=%s %s", result["customer_id"], result["firstname"], result["lastname"])
+        assert result["pii_mode"] == "full"
+        log.info("Tool admin_get_customer: id=%d name=%s %s", result["customer_id"], result["firstname"], result["lastname"])
 
     async def test_tool_get_inventory(self) -> None:
-        """c_get_inventory returns salable data for real SKUs."""
+        """admin_get_inventory returns salable data for real SKUs."""
         async with MagentoClient.from_config() as client:
             sku = await _discover_product_sku(client)
         if sku is None:
@@ -536,7 +517,7 @@ class TestToolEndToEnd:
         from magemcp.server import mcp as server
 
         tools = server._tool_manager._tools
-        tool_fn = tools["c_get_inventory"].fn
+        tool_fn = tools["admin_get_inventory"].fn
 
         try:
             result = await tool_fn(skus=[sku])
@@ -548,7 +529,7 @@ class TestToolEndToEnd:
         assert len(result["items"]) == 1
         item = result["items"][0]
         assert item["sku"] == sku
-        log.info("Tool c_get_inventory: %s qty=%s salable=%s", item["sku"], item["salable_quantity"], item["is_salable"])
+        log.info("Tool admin_get_inventory: %s qty=%s salable=%s", item["sku"], item["salable_quantity"], item["is_salable"])
 
 
 # ---------------------------------------------------------------------------
@@ -582,16 +563,16 @@ class TestCrossToolScenarios:
         from magemcp.server import mcp as server
 
         tools = server._tool_manager._tools
-        order_fn = tools["c_get_order"].fn
-        customer_fn = tools["c_get_customer"].fn
+        order_fn = tools["admin_get_order"].fn
+        customer_fn = tools["admin_get_customer"].fn
 
         async with MagentoClient.from_config() as client:
             increment_id = await _discover_order_increment_id(client)
         if increment_id is None:
             pytest.skip("No orders in the system")
 
-        # Get order with full PII to extract customer info
-        order_result = await order_fn(increment_id=increment_id, pii_mode="full")
+        # Get order — admin always returns full data
+        order_result = await order_fn(increment_id=increment_id)
 
         # Look up the order in REST to get customer_id (not in our redacted DTO)
         async with MagentoClient.from_config() as client:
@@ -620,7 +601,7 @@ class TestCrossToolScenarios:
 
         tools = server._tool_manager._tools
         search_fn = tools["c_search_products"].fn
-        inventory_fn = tools["c_get_inventory"].fn
+        inventory_fn = tools["admin_get_inventory"].fn
 
         search_result = await search_fn(page_size=1)
         if not search_result["products"]:

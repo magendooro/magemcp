@@ -1,4 +1,4 @@
-"""Tests for c_get_customer tool."""
+"""Tests for admin_get_customer tool."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import respx
 
 from magemcp.connectors.magento import MagentoClient, MagentoNotFoundError
 from magemcp.models.customer import CGetCustomerInput, CGetCustomerOutput
-from magemcp.tools.get_customer import parse_customer
+from magemcp.tools.admin.get_customer import parse_customer
 
 BASE_URL = "https://magento.test"
 TOKEN = "test-token-123"
@@ -75,7 +75,6 @@ class TestInputValidation:
         assert inp.customer_id == 42
         assert inp.email is None
         assert inp.store_scope == "default"
-        assert inp.pii_mode == "redacted"
 
     def test_valid_by_email(self) -> None:
         inp = CGetCustomerInput(email="jane@example.com")
@@ -99,14 +98,6 @@ class TestInputValidation:
         with pytest.raises(Exception):
             CGetCustomerInput(customer_id=-1)
 
-    def test_full_pii_mode(self) -> None:
-        inp = CGetCustomerInput(customer_id=1, pii_mode="full")
-        assert inp.pii_mode == "full"
-
-    def test_invalid_pii_mode(self) -> None:
-        with pytest.raises(Exception):
-            CGetCustomerInput(customer_id=1, pii_mode="partial")  # type: ignore[arg-type]
-
     def test_invalid_store_scope(self) -> None:
         with pytest.raises(Exception):
             CGetCustomerInput(customer_id=1, store_scope="INVALID!")
@@ -121,24 +112,24 @@ class TestInputValidation:
 
 
 # ---------------------------------------------------------------------------
-# parse_customer — redacted mode
+# parse_customer — admin always returns full data
 # ---------------------------------------------------------------------------
 
 
-class TestParseCustomerRedacted:
-    def test_basic_redacted(self) -> None:
+class TestParseCustomerFull:
+    def test_basic_full(self) -> None:
         raw = _make_rest_customer()
-        result = parse_customer(raw, redact=True)
+        result = parse_customer(raw)
 
         assert result.customer_id == 42
         assert result.group_id == 1
-        assert result.pii_mode == "redacted"
+        assert result.pii_mode == "full"
 
-        # PII should be masked
-        assert result.email == "j***@e***.com"
-        assert result.firstname == "J."
-        assert result.lastname == "D."
-        assert result.dob == "***"
+        # Full PII — not masked
+        assert result.email == "jane.doe@example.com"
+        assert result.firstname == "Jane"
+        assert result.lastname == "Doe"
+        assert result.dob == "1990-05-15"
 
         # Non-PII should be present
         assert result.created_at == "2025-01-10 08:00:00"
@@ -146,40 +137,41 @@ class TestParseCustomerRedacted:
         assert result.default_billing_id == "10"
         assert result.default_shipping_id == "11"
 
-    def test_no_dob_redacted(self) -> None:
-        raw = _make_rest_customer(dob=None)
-        result = parse_customer(raw, redact=True)
-        assert result.dob is None
-
-    def test_missing_name_redacted(self) -> None:
-        raw = _make_rest_customer(firstname=None, lastname=None)  # type: ignore[arg-type]
-        result = parse_customer(raw, redact=True)
-        assert result.firstname == "?."
-        assert result.lastname == "?."
-
-
-# ---------------------------------------------------------------------------
-# parse_customer — full mode
-# ---------------------------------------------------------------------------
-
-
-class TestParseCustomerFull:
-    def test_basic_full(self) -> None:
-        raw = _make_rest_customer()
-        result = parse_customer(raw, redact=False)
-
-        assert result.pii_mode == "full"
-        assert result.email == "jane.doe@example.com"
-        assert result.firstname == "Jane"
-        assert result.lastname == "Doe"
-        assert result.dob == "1990-05-15"
-
     def test_missing_optional_fields(self) -> None:
         raw = _make_rest_customer(default_billing=None, default_shipping=None, dob=None)
-        result = parse_customer(raw, redact=False)
+        result = parse_customer(raw)
         assert result.default_billing_id is None
         assert result.default_shipping_id is None
         assert result.dob is None
+
+
+# ---------------------------------------------------------------------------
+# Admin tool returns full PII — explicit verification
+# ---------------------------------------------------------------------------
+
+
+class TestAdminGetCustomerReturnsFullData:
+    def test_email_not_masked(self) -> None:
+        raw = _make_rest_customer(email="jane.doe@example.com")
+        result = parse_customer(raw)
+        assert result.email == "jane.doe@example.com"
+        assert "***" not in (result.email or "")
+
+    def test_firstname_not_masked(self) -> None:
+        raw = _make_rest_customer(firstname="Jane")
+        result = parse_customer(raw)
+        assert result.firstname == "Jane"
+
+    def test_lastname_not_masked(self) -> None:
+        raw = _make_rest_customer(lastname="Doe")
+        result = parse_customer(raw)
+        assert result.lastname == "Doe"
+
+    def test_dob_not_masked(self) -> None:
+        raw = _make_rest_customer(dob="1990-05-15")
+        result = parse_customer(raw)
+        assert result.dob == "1990-05-15"
+        assert result.dob != "***"
 
 
 # ---------------------------------------------------------------------------
@@ -189,8 +181,8 @@ class TestParseCustomerFull:
 
 class TestToolEndToEnd:
     @respx.mock
-    async def test_get_customer_by_id_redacted(self) -> None:
-        """Fetch by customer ID with redacted PII."""
+    async def test_get_customer_by_id(self) -> None:
+        """Fetch by customer ID — admin returns full data."""
         customer = _make_rest_customer()
         route = respx.get(f"{BASE_URL}/rest/default/V1/customers/42").mock(
             return_value=httpx.Response(200, json=customer),
@@ -199,10 +191,10 @@ class TestToolEndToEnd:
         async with MagentoClient(base_url=BASE_URL, token=TOKEN) as client:
             data = await client.get("/V1/customers/42")
 
-        result = parse_customer(data, redact=True)
+        result = parse_customer(data)
         assert result.customer_id == 42
-        assert result.email == "j***@e***.com"
-        assert result.firstname == "J."
+        assert result.email == "jane.doe@example.com"
+        assert result.firstname == "Jane"
         assert route.called
 
     @respx.mock
@@ -224,9 +216,9 @@ class TestToolEndToEnd:
         items = data.get("items") or []
         assert len(items) == 1
 
-        result = parse_customer(items[0], redact=True)
+        result = parse_customer(items[0])
         assert result.customer_id == 42
-        assert result.email == "j***@e***.com"
+        assert result.email == "jane.doe@example.com"
         assert route.called
 
     @respx.mock
@@ -273,22 +265,6 @@ class TestToolEndToEnd:
             with pytest.raises(MagentoNotFoundError, match="No such entity"):
                 await client.get("/V1/customers/999")
 
-    @respx.mock
-    async def test_get_customer_full_pii(self) -> None:
-        """Full PII mode returns unmasked data."""
-        customer = _make_rest_customer()
-        respx.get(f"{BASE_URL}/rest/default/V1/customers/42").mock(
-            return_value=httpx.Response(200, json=customer),
-        )
-
-        async with MagentoClient(base_url=BASE_URL, token=TOKEN) as client:
-            data = await client.get("/V1/customers/42")
-
-        result = parse_customer(data, redact=False)
-        assert result.email == "jane.doe@example.com"
-        assert result.firstname == "Jane"
-        assert result.lastname == "Doe"
-
 
 # ---------------------------------------------------------------------------
 # Output serialization
@@ -299,15 +275,15 @@ class TestOutputSerialization:
     def test_model_dump_json(self) -> None:
         """Verify that the output serializes cleanly to JSON-compatible dict."""
         raw = _make_rest_customer()
-        result = parse_customer(raw, redact=True)
+        result = parse_customer(raw)
         dumped = result.model_dump(mode="json")
 
         assert isinstance(dumped, dict)
         assert dumped["customer_id"] == 42
-        assert dumped["pii_mode"] == "redacted"
-        assert dumped["email"] == "j***@e***.com"
-        assert dumped["firstname"] == "J."
-        assert dumped["lastname"] == "D."
-        assert dumped["dob"] == "***"
+        assert dumped["pii_mode"] == "full"
+        assert dumped["email"] == "jane.doe@example.com"
+        assert dumped["firstname"] == "Jane"
+        assert dumped["lastname"] == "Doe"
+        assert dumped["dob"] == "1990-05-15"
         assert dumped["group_id"] == 1
         assert dumped["created_at"] == "2025-01-10 08:00:00"
