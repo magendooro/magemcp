@@ -7,7 +7,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from magemcp.connectors.magento import MagentoClient
+from magemcp.connectors.rest_client import RESTClient
 from magemcp.models.order import (
     CGetOrderInput,
     CGetOrderOutput,
@@ -218,12 +218,12 @@ def register_get_order(mcp: FastMCP) -> None:
             inp.store_scope,
         )
 
-        params = MagentoClient.search_params(
+        params = RESTClient.search_params(
             filters={"increment_id": inp.increment_id},
             page_size=1,
         )
 
-        async with MagentoClient.from_config() as client:
+        async with RESTClient.from_env() as client:
             data = await client.get(
                 "/V1/orders",
                 params=params,

@@ -7,7 +7,8 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from magemcp.connectors.magento import MagentoClient, MagentoError
+from magemcp.connectors.errors import MagentoError
+from magemcp.connectors.rest_client import RESTClient
 from magemcp.models.inventory import CGetInventoryInput, CGetInventoryOutput, SkuInventory
 
 log = logging.getLogger(__name__)
@@ -51,7 +52,7 @@ def register_get_inventory(mcp: FastMCP) -> None:
 
         results: list[SkuInventory] = []
 
-        async with MagentoClient.from_config() as client:
+        async with RESTClient.from_env() as client:
             for sku in inp.skus:
                 # Fetch salable quantity
                 qty: float = 0

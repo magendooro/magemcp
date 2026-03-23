@@ -7,7 +7,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from magemcp.connectors.magento import MagentoClient
+from magemcp.connectors.graphql_client import GraphQLClient
 from magemcp.models.catalog import (
     CSearchProductsInput,
     CSearchProductsOutput,
@@ -219,8 +219,8 @@ def register_search_products(mcp: FastMCP) -> None:
         variables = _build_variables(inp)
         log.info("c_search_products store=%s variables=%s", inp.store_scope, variables)
 
-        async with MagentoClient.from_config() as client:
-            data = await client.graphql(
+        async with GraphQLClient.from_env() as client:
+            data = await client.query(
                 SEARCH_PRODUCTS_QUERY,
                 variables=variables,
                 store_code=inp.store_scope,
