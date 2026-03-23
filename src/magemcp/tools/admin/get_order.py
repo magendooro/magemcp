@@ -121,7 +121,7 @@ def _extract_shipping_address(order: dict[str, Any]) -> dict[str, Any] | None:
 def _parse_status_history(
     raw_history: list[dict[str, Any]],
 ) -> list[StatusHistoryEntry]:
-    """Parse and return the last 3 status history entries (newest first)."""
+    """Parse status history entries (newest first). Admin view returns all."""
     entries: list[StatusHistoryEntry] = []
     for entry in raw_history:
         entries.append(StatusHistoryEntry(
@@ -131,8 +131,7 @@ def _parse_status_history(
             is_customer_notified=bool(entry.get("is_customer_notified", False)),
             is_visible_on_front=bool(entry.get("is_visible_on_front", False)),
         ))
-    # Magento returns newest first; keep that order, limit to 3
-    return entries[:3]
+    return entries
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +154,18 @@ def parse_order(order: dict[str, Any]) -> CGetOrderOutput:
     parts = [p for p in [firstname, lastname] if p]
     customer_name = " ".join(parts) if parts else "Unknown"
 
+    # Payment info
+    payment = order.get("payment") or {}
+    payment_method = payment.get("method")
+    payment_additional = payment.get("additional_information") or []
+
+    # Invoice and credit memo references from extension_attributes
+    ext = order.get("extension_attributes") or {}
+    invoice_ids = [inv["entity_id"] for inv in (ext.get("invoices") or []) if "entity_id" in inv]
+    credit_memo_ids = [
+        cm["entity_id"] for cm in (ext.get("credit_memos") or []) if "entity_id" in cm
+    ]
+
     return CGetOrderOutput(
         increment_id=order.get("increment_id", ""),
         state=order.get("state", ""),
@@ -176,6 +187,10 @@ def parse_order(order: dict[str, Any]) -> CGetOrderOutput:
         shipping_method=_extract_shipping_method(order),
         shipments=_parse_shipments(order),
         status_history=_parse_status_history(order.get("status_histories") or []),
+        payment_method=payment_method,
+        payment_additional=payment_additional,
+        invoice_ids=invoice_ids,
+        credit_memo_ids=credit_memo_ids,
         pii_mode="full",
     )
 

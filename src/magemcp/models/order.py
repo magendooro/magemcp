@@ -153,10 +153,10 @@ class StatusHistoryEntry(BaseModel):
 
 
 class CGetOrderOutput(BaseModel):
-    """Order support view — redacted by default per CLAUDE.md spec.
+    """Full admin order view — no PII redaction.
 
     Contains increment ID, status, totals, fulfillment state, shipment summary,
-    and last 3 status history entries. No payment details, no full customer info.
+    status history, payment info, and invoice/credit memo references.
     """
 
     increment_id: str
@@ -165,7 +165,7 @@ class CGetOrderOutput(BaseModel):
     created_at: str
     updated_at: str | None = None
 
-    # Customer (redacted by default)
+    # Customer
     customer_name: str
     customer_email: str | None = None
 
@@ -181,7 +181,7 @@ class CGetOrderOutput(BaseModel):
     # Items
     items: list[OrderItem] = Field(default_factory=list)
 
-    # Addresses (redacted by default)
+    # Addresses
     billing_address: OrderAddress | None = None
     shipping_address: OrderAddress | None = None
 
@@ -189,7 +189,35 @@ class CGetOrderOutput(BaseModel):
     shipping_method: str | None = None
     shipments: list[ShipmentSummary] = Field(default_factory=list)
 
-    # Last 3 internal comments
+    # Status history
     status_history: list[StatusHistoryEntry] = Field(default_factory=list)
 
+    # Payment
+    payment_method: str | None = None
+    payment_additional: list[str] = Field(default_factory=list)
+
+    # References
+    invoice_ids: list[int] = Field(default_factory=list)
+    credit_memo_ids: list[int] = Field(default_factory=list)
+
     pii_mode: str = "redacted"
+
+
+# ---------------------------------------------------------------------------
+# Order summary (for search results)
+# ---------------------------------------------------------------------------
+
+
+class OrderSummary(BaseModel):
+    """Lightweight order summary for search results."""
+
+    increment_id: str
+    state: str
+    status: str
+    created_at: str
+    grand_total: float
+    currency_code: str | None = None
+    total_qty_ordered: float
+    customer_name: str
+    customer_email: str | None = None
+    total_items: int = 0
