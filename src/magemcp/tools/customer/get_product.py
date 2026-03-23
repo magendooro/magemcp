@@ -7,7 +7,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from magemcp.connectors.magento import MagentoClient
+from magemcp.connectors.graphql_client import GraphQLClient
 from magemcp.models.catalog import (
     CategoryBreadcrumb,
     CGetProductInput,
@@ -201,8 +201,8 @@ def register_get_product(mcp: FastMCP) -> None:
 
         log.info("c_get_product sku=%s store=%s", inp.sku, inp.store_scope)
 
-        async with MagentoClient.from_config() as client:
-            data = await client.graphql(
+        async with GraphQLClient.from_env() as client:
+            data = await client.query(
                 GET_PRODUCT_QUERY,
                 variables={"sku": inp.sku},
                 store_code=inp.store_scope,

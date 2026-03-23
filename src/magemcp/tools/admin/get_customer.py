@@ -7,7 +7,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from magemcp.connectors.magento import MagentoClient
+from magemcp.connectors.rest_client import RESTClient
 from magemcp.models.customer import CGetCustomerInput, CGetCustomerOutput
 
 log = logging.getLogger(__name__)
@@ -84,7 +84,7 @@ def register_get_customer(mcp: FastMCP) -> None:
             inp.store_scope,
         )
 
-        async with MagentoClient.from_config() as client:
+        async with RESTClient.from_env() as client:
             if inp.customer_id is not None:
                 # Direct ID lookup
                 data = await client.get(
@@ -95,7 +95,7 @@ def register_get_customer(mcp: FastMCP) -> None:
                 return result.model_dump(mode="json")
 
             # Email lookup via search
-            params = MagentoClient.search_params(
+            params = RESTClient.search_params(
                 filters={
                     "email": inp.email,
                     "website_id": inp.website_id,
