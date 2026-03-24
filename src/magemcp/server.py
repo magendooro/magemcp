@@ -63,6 +63,10 @@ from magemcp.tools.admin.get_order import register_get_order
 
 register_get_order(mcp)
 
+from magemcp.tools.admin.search_customers import register_search_customers
+
+register_search_customers(mcp)
+
 from magemcp.tools.admin.get_customer import register_get_customer
 
 register_get_customer(mcp)
@@ -70,6 +74,10 @@ register_get_customer(mcp)
 from magemcp.tools.admin.get_inventory import register_get_inventory
 
 register_get_inventory(mcp)
+
+from magemcp.tools.admin.update_inventory import register_update_inventory
+
+register_update_inventory(mcp)
 
 from magemcp.tools.admin.order_actions import register_order_actions
 

@@ -8,7 +8,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from magemcp.connectors.rest_client import RESTClient
-from magemcp.models.customer import CGetCustomerInput, CGetCustomerOutput
+from magemcp.models.customer import CGetCustomerInput, CGetCustomerOutput, CustomerAddress
 
 log = logging.getLogger(__name__)
 
@@ -18,11 +18,40 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+def _parse_address(raw: dict[str, Any]) -> CustomerAddress:
+    return CustomerAddress(
+        id=raw.get("id"),
+        firstname=raw.get("firstname"),
+        lastname=raw.get("lastname"),
+        street=raw.get("street") or [],
+        city=raw.get("city"),
+        region=raw.get("region", {}).get("region") if isinstance(raw.get("region"), dict) else raw.get("region"),
+        region_code=raw.get("region", {}).get("region_code") if isinstance(raw.get("region"), dict) else None,
+        postcode=raw.get("postcode"),
+        country_id=raw.get("country_id"),
+        telephone=raw.get("telephone"),
+        default_billing=raw.get("default_billing", False),
+        default_shipping=raw.get("default_shipping", False),
+    )
+
+
+def _parse_custom_attributes(raw_list: list[dict[str, Any]]) -> dict[str, Any]:
+    """Flatten Magento's [{attribute_code, value}] list to a plain dict."""
+    return {item["attribute_code"]: item.get("value") for item in raw_list if "attribute_code" in item}
+
+
 def parse_customer(raw: dict[str, Any]) -> CGetCustomerOutput:
     """Transform a raw Magento REST customer into a CGetCustomerOutput.
 
     Admin tools always return full data — no PII redaction.
     """
+    addresses = [_parse_address(a) for a in raw.get("addresses") or []]
+
+    custom_attrs_raw = raw.get("custom_attributes") or []
+    custom_attributes = _parse_custom_attributes(custom_attrs_raw) if isinstance(custom_attrs_raw, list) else {}
+
+    ext = raw.get("extension_attributes") or {}
+
     return CGetCustomerOutput(
         customer_id=raw["id"],
         group_id=raw.get("group_id"),
@@ -38,6 +67,9 @@ def parse_customer(raw: dict[str, Any]) -> CGetCustomerOutput:
         is_active=not raw.get("disable_auto_group_change", False),
         default_billing_id=raw.get("default_billing"),
         default_shipping_id=raw.get("default_shipping"),
+        addresses=addresses,
+        custom_attributes=custom_attributes,
+        extension_attributes=dict(ext),
         pii_mode="full",
     )
 
@@ -54,7 +86,8 @@ def register_get_customer(mcp: FastMCP) -> None:
         name="admin_get_customer",
         description=(
             "Look up a customer by internal ID or email address. Returns full customer "
-            "profile including name, email, DOB, customer group, and account dates."
+            "profile including name, email, DOB, customer group, account dates, all "
+            "addresses, custom attributes, and extension attributes (e.g. B2B company info)."
         ),
         annotations={
             "readOnlyHint": True,

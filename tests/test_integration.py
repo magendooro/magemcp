@@ -1283,3 +1283,111 @@ class TestMcpVsRawApi:
             tool_item["salable_quantity"],
             tool_item["is_salable"],
         )
+
+
+# ---------------------------------------------------------------------------
+# admin_search_customers integration
+# ---------------------------------------------------------------------------
+
+
+class TestSearchCustomers:
+    """Integration tests for admin_search_customers tool."""
+
+    async def test_search_customers_real(self, client: MagentoClient) -> None:
+        """Raw REST call to /V1/customers/search returns items with full data."""
+        from magemcp.connectors.rest_client import RESTClient
+        params = RESTClient.search_params(page_size=5)
+        async with RESTClient.from_env() as rest:
+            data = await rest.get("/V1/customers/search", params=params)
+
+        assert "items" in data
+        if data["items"]:
+            customer = data["items"][0]
+            assert "email" in customer
+            assert "firstname" in customer
+            assert "id" in customer
+            # Full unmasked email
+            assert "@" in customer["email"]
+            log.info(
+                "Customer search: %d results, first=%s %s <%s>",
+                data["total_count"],
+                customer.get("firstname"),
+                customer.get("lastname"),
+                customer.get("email"),
+            )
+
+    async def test_tool_search_customers(self) -> None:
+        """admin_search_customers tool returns CustomerSummary list."""
+        from magemcp.tools.admin.search_customers import admin_search_customers
+        result = await admin_search_customers(page_size=5)
+
+        assert "customers" in result
+        assert "total_count" in result
+        # If any customers exist, verify full data is returned
+        if result["customers"]:
+            c = result["customers"][0]
+            assert "customer_id" in c
+            assert "email" in c
+            assert "@" in (c["email"] or "")
+            log.info(
+                "Tool search customers: %d results, first=%s <%s>",
+                result["total_count"],
+                c.get("firstname"),
+                c.get("email"),
+            )
+
+    async def test_search_by_email_wildcard(self, client: MagentoClient) -> None:
+        """Search by partial email using like condition."""
+        from magemcp.connectors.rest_client import RESTClient
+        # First discover a real email domain
+        params = RESTClient.search_params(page_size=1)
+        async with RESTClient.from_env() as rest:
+            data = await rest.get("/V1/customers/search", params=params)
+
+        if not data.get("items"):
+            pytest.skip("No customers found")
+
+        email = data["items"][0]["email"]
+        domain = email.split("@")[-1]
+
+        from magemcp.tools.admin.search_customers import admin_search_customers
+        result = await admin_search_customers(email=f"%@{domain}")
+
+        assert result["total_count"] >= 1
+        assert all("@" + domain in (c["email"] or "") for c in result["customers"])
+
+
+# ---------------------------------------------------------------------------
+# admin_get_customer enhanced integration
+# ---------------------------------------------------------------------------
+
+
+class TestGetCustomerEnhanced:
+    """Integration tests for enhanced admin_get_customer (addresses + custom_attributes)."""
+
+    async def test_get_customer_includes_addresses(self, client: MagentoClient) -> None:
+        """admin_get_customer returns addresses list."""
+        from magemcp.connectors.rest_client import RESTClient
+        params = RESTClient.search_params(page_size=1)
+        async with RESTClient.from_env() as rest:
+            data = await rest.get("/V1/customers/search", params=params)
+
+        if not data.get("items"):
+            pytest.skip("No customers found")
+
+        customer_id = data["items"][0]["id"]
+        from magemcp.tools.admin.get_customer import parse_customer
+        async with RESTClient.from_env() as rest:
+            raw = await rest.get(f"/V1/customers/{customer_id}")
+
+        result = parse_customer(raw)
+        # addresses is always a list (may be empty)
+        assert isinstance(result.addresses, list)
+        assert isinstance(result.custom_attributes, dict)
+        assert isinstance(result.extension_attributes, dict)
+        log.info(
+            "Customer %d has %d addresses, %d custom attrs",
+            customer_id,
+            len(result.addresses),
+            len(result.custom_attributes),
+        )
