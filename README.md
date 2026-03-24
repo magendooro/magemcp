@@ -4,6 +4,8 @@ MCP (Model Context Protocol) server for Magento 2 / Adobe Commerce by [Magendoo]
 
 Connects AI agents to a live Magento instance via REST and GraphQL APIs, exposing typed tools for catalog, cart, orders, customers, inventory, CMS, and promotions.
 
+See [USAGE.md](USAGE.md) for example agent conversations and connection configs.
+
 ## Architecture
 
 MageMCP runs as a standalone Python service — not embedded in Magento. Tools are split into two namespaces based on access context:
@@ -137,14 +139,14 @@ magemcp          # runs MCP server on stdio
 ### With Docker
 
 ```bash
-cp .env.example .env   # fill in MAGENTO_BASE_URL and MAGEMCP_ADMIN_TOKEN
-docker compose up -d
-docker compose logs -f magemcp
+docker compose build magemcp
 ```
+
+The image is built once and reused. The MCP client spawns a fresh container per session via `docker compose run` — no persistent daemon is needed.
 
 ### Connect to Claude Desktop
 
-Add to `claude_desktop_config.json`:
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```json
 {
@@ -161,7 +163,9 @@ Add to `claude_desktop_config.json`:
 }
 ```
 
-Or with the local venv:
+> **Local Magento?** Use `http://host.docker.internal:<port>` — Docker containers cannot reach the host via `127.0.0.1`.
+
+Or with the local venv (no Docker, no address translation):
 
 ```json
 {
@@ -240,7 +244,7 @@ pytest tests/ --ignore=tests/test_integration.py --ignore=tests/test_integration
 
 # Full suite including integration tests
 MAGENTO_BASE_URL=https://magento.example.com \
-MAGENTO_TOKEN=your-token \
+MAGEMCP_ADMIN_TOKEN=your-token \
 pytest tests/ -v
 
 # Integration tests only
