@@ -112,17 +112,26 @@ async def test_add_comment(mock_env: None, respx_mock: respx.MockRouter) -> None
     payload = json.loads(request.content)
     assert payload["statusHistory"]["comment"] == "Test comment"
     assert payload["statusHistory"]["is_visible_on_front"] == 1
+    assert payload["statusHistory"]["is_customer_notified"] == 0
     assert payload["statusHistory"]["status"] == "processing"
 
 
 @pytest.mark.asyncio
+async def test_create_invoice_requires_confirmation(mock_env: None) -> None:
+    """Invoice creation requires confirmation — irreversible."""
+    result = await admin_create_invoice(order_id=123)
+    assert result["confirmation_required"] is True
+    assert result["action"] == "create_invoice"
+
+
+@pytest.mark.asyncio
 async def test_create_invoice(mock_env: None, respx_mock: respx.MockRouter) -> None:
-    """Test creating an invoice."""
+    """Test creating an invoice with confirm=True."""
     respx_mock.post(f"{BASE_URL}/rest/{STORE_CODE}/V1/order/123/invoice").mock(
         return_value=Response(200, json="INV-001")
     )
 
-    result = await admin_create_invoice(order_id=123, capture=True)
+    result = await admin_create_invoice(order_id=123, capture=True, confirm=True)
     assert result["success"] is True
     assert result["invoice_id"] == "INV-001"
 
@@ -132,10 +141,18 @@ async def test_create_invoice(mock_env: None, respx_mock: respx.MockRouter) -> N
 
 
 @pytest.mark.asyncio
+async def test_create_shipment_requires_confirmation(mock_env: None) -> None:
+    """Shipment creation requires confirmation — irreversible."""
+    result = await admin_create_shipment(order_id=123)
+    assert result["confirmation_required"] is True
+    assert result["action"] == "create_shipment"
+
+
+@pytest.mark.asyncio
 async def test_create_shipment_with_tracking(
     mock_env: None, respx_mock: respx.MockRouter,
 ) -> None:
-    """Test creating shipment with tracking."""
+    """Test creating shipment with tracking and confirm=True."""
     respx_mock.post(f"{BASE_URL}/rest/{STORE_CODE}/V1/order/123/ship").mock(
         return_value=Response(200, json="SHIP-001")
     )
@@ -145,6 +162,7 @@ async def test_create_shipment_with_tracking(
         tracking_number="TRACK123",
         carrier_code="ups",
         title="UPS Ground",
+        confirm=True,
     )
 
     assert result["success"] is True
@@ -160,12 +178,12 @@ async def test_create_shipment_with_tracking(
 async def test_create_shipment_without_tracking(
     mock_env: None, respx_mock: respx.MockRouter,
 ) -> None:
-    """Test creating shipment without tracking."""
+    """Test creating shipment without tracking (confirmed)."""
     respx_mock.post(f"{BASE_URL}/rest/{STORE_CODE}/V1/order/123/ship").mock(
         return_value=Response(200, json="SHIP-002")
     )
 
-    await admin_create_shipment(order_id=123)
+    await admin_create_shipment(order_id=123, confirm=True)
 
     request = respx_mock.calls.last.request
     payload = json.loads(request.content)

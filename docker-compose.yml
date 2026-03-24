@@ -20,17 +20,21 @@ services:
     #   ports:
     #     - "8000:8000"
 
-  # Development profile — mounts source for live editing
-  # Usage: docker compose --profile dev up magemcp-dev
+  # Development profile — mounts source into builder stage for live editing
+  # Usage: docker compose --profile dev up magemcp-dev --build
+  # The builder stage has hatchling available so editable install works.
   magemcp-dev:
-    build: .
+    build:
+      context: .
+      target: builder
     env_file: .env
     stdin_open: true
     tty: true
+    working_dir: /build
     volumes:
-      - ./src:/home/magemcp/src:ro
-      - ./pyproject.toml:/home/magemcp/pyproject.toml:ro
-      - ./README.md:/home/magemcp/README.md:ro
-    entrypoint: ["/bin/sh", "-c", "pip install --user -e /home/magemcp && magemcp"]
+      - ./src:/build/src:ro
+      - ./pyproject.toml:/build/pyproject.toml:ro
+      - ./README.md:/build/README.md:ro
+    entrypoint: ["/bin/sh", "-c", "pip install -q -e . && magemcp"]
     profiles:
       - dev

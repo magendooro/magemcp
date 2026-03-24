@@ -116,16 +116,21 @@ async def admin_create_invoice(
     order_id: int,
     capture: bool = False,
     notify_customer: bool = False,
+    confirm: bool = False,
     store_scope: str = "default",
 ) -> dict[str, Any]:
-    """Create invoice."""
-    log.info("admin_create_invoice id=%s capture=%s", order_id, capture)
-    
+    """Create invoice for an order. Irreversible — requires confirmation."""
+    log.info("admin_create_invoice id=%s capture=%s confirm=%s", order_id, capture, confirm)
+
+    prompt = needs_confirmation("create_invoice", str(order_id), confirm)
+    if prompt:
+        return prompt
+
     payload = {
         "capture": capture,
         "notify": notify_customer,
     }
-    
+
     async with RESTClient.from_env() as client:
         # Note: Magento endpoint is /order/{id}/invoice (singular 'order')
         invoice_id = await client.post(
@@ -133,7 +138,7 @@ async def admin_create_invoice(
             json=payload,
             store_code=store_scope,
         )
-        
+
     return {"success": True, "order_id": order_id, "invoice_id": invoice_id}
 
 
@@ -143,20 +148,25 @@ async def admin_create_shipment(
     carrier_code: str | None = None,
     title: str | None = None,
     notify_customer: bool = False,
+    confirm: bool = False,
     store_scope: str = "default",
 ) -> dict[str, Any]:
-    """Create shipment."""
-    log.info("admin_create_shipment id=%s tracking=%s", order_id, tracking_number)
-    
+    """Create a shipment for an order. Irreversible — requires confirmation."""
+    log.info("admin_create_shipment id=%s tracking=%s confirm=%s", order_id, tracking_number, confirm)
+
+    prompt = needs_confirmation("create_shipment", str(order_id), confirm)
+    if prompt:
+        return prompt
+
     payload: dict[str, Any] = {"notify": notify_customer}
-    
+
     if tracking_number:
         payload["tracks"] = [{
             "track_number": tracking_number,
             "carrier_code": carrier_code or "custom",
             "title": title or "Shipping",
         }]
-        
+
     async with RESTClient.from_env() as client:
         # Note: Magento endpoint is /order/{id}/ship (singular 'order')
         shipment_id = await client.post(
@@ -164,7 +174,7 @@ async def admin_create_shipment(
             json=payload,
             store_code=store_scope,
         )
-        
+
     return {"success": True, "order_id": order_id, "shipment_id": shipment_id}
 
 
@@ -231,5 +241,5 @@ def register_order_actions(mcp: FastMCP) -> None:
     mcp.tool(
         name="admin_send_order_email",
         description="Resend the order confirmation email to the customer.",
-        annotations={"readOnlyHint": False, "destructiveHint": False, "openWorldHint": True},
+        annotations={"readOnlyHint": False, "destructiveHint": True, "openWorldHint": True},
     )(admin_send_order_email)
