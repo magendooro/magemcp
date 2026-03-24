@@ -1391,3 +1391,75 @@ class TestGetCustomerEnhanced:
             len(result.addresses),
             len(result.custom_attributes),
         )
+
+
+# ---------------------------------------------------------------------------
+# admin product tools integration
+# ---------------------------------------------------------------------------
+
+
+class TestAdminProducts:
+    """Integration tests for admin product tools."""
+
+    async def test_get_product_24_mb01(self) -> None:
+        """Get Magento sample data product by SKU."""
+        from magemcp.connectors.rest_client import RESTClient
+        async with RESTClient.from_env() as client:
+            product = await client.get("/V1/products/24-MB01")
+
+        assert product["sku"] == "24-MB01"
+        assert product["name"]
+        assert "price" in product
+        assert "media_gallery_entries" in product
+        log.info(
+            "Product 24-MB01: name=%s price=%s media=%d",
+            product["name"],
+            product["price"],
+            len(product.get("media_gallery_entries") or []),
+        )
+
+    async def test_tool_get_product(self) -> None:
+        """admin_get_product returns parsed ProductDetail."""
+        from magemcp.tools.admin.products import admin_get_product
+        result = await admin_get_product(sku="24-MB01")
+
+        if "error" in result:
+            pytest.skip("24-MB01 not in this Magento instance")
+
+        assert result["sku"] == "24-MB01"
+        assert result["name"]
+        assert "stock" in result
+        assert "media_gallery" in result
+        assert "custom_attributes" in result
+        log.info(
+            "admin_get_product 24-MB01: stock_qty=%s description_len=%s",
+            result.get("stock", {}).get("qty") if result.get("stock") else "n/a",
+            len(result.get("custom_attributes", {}).get("description") or ""),
+        )
+
+    async def test_tool_search_products(self) -> None:
+        """admin_search_products returns paginated product list."""
+        from magemcp.tools.admin.products import admin_search_products
+        result = await admin_search_products(page_size=5, status=1)
+
+        assert "products" in result
+        assert "total_count" in result
+        if result["products"]:
+            p = result["products"][0]
+            assert "sku" in p
+            assert "name" in p
+            log.info(
+                "admin_search_products: %d total, first=%s (%s)",
+                result["total_count"],
+                p["sku"],
+                p["name"],
+            )
+
+    async def test_search_products_by_sku_wildcard(self) -> None:
+        """Wildcard SKU search returns matching products."""
+        from magemcp.tools.admin.products import admin_search_products
+        result = await admin_search_products(sku="24-MB%", page_size=10)
+
+        assert "products" in result
+        for p in result["products"]:
+            assert p["sku"].startswith("24-MB")
