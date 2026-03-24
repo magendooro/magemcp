@@ -79,6 +79,10 @@ from magemcp.tools.admin.update_inventory import register_update_inventory
 
 register_update_inventory(mcp)
 
+from magemcp.tools.admin.products import register_product_tools
+
+register_product_tools(mcp)
+
 from magemcp.tools.admin.order_actions import register_order_actions
 
 register_order_actions(mcp)
