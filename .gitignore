@@ -25,9 +25,10 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 
-# Environment
+# Environment — ignore secrets, but track the example file
 .env
 .env.*
+!.env.example
 
 # OS
 .DS_Store
