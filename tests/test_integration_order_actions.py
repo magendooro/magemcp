@@ -12,6 +12,11 @@ import uuid
 import pytest
 
 from magemcp.connectors.magento import MagentoClient
+from magemcp.tools.admin.order_actions import (
+    admin_add_order_comment,
+    admin_hold_order,
+    admin_unhold_order,
+)
 
 log = logging.getLogger(__name__)
 
@@ -47,14 +52,10 @@ class TestOrderActionsIntegration:
         if order_id is None:
             pytest.skip("No orders found to test comment addition")
 
-        from magemcp.server import mcp as server
-        tools = server._tool_manager._tools
-        tool_fn = tools["admin_add_order_comment"].fn
-
         # Use a unique comment to verify
         unique_comment = f"MageMCP Integration Test {uuid.uuid4()}"
-        
-        result = await tool_fn(
+
+        result = await admin_add_order_comment(
             order_id=order_id,
             comment=unique_comment,
             is_visible_on_front=False,
@@ -90,22 +91,17 @@ class TestOrderActionsIntegration:
             
         order_id = int(items[0]["entity_id"])
         
-        from magemcp.server import mcp as server
-        tools = server._tool_manager._tools
-        hold_fn = tools["admin_hold_order"].fn
-        unhold_fn = tools["admin_unhold_order"].fn
-
         # 1. Hold
         log.info("Attempting to hold order %d...", order_id)
         # First call asks for confirmation
-        prompt = await hold_fn(order_id=order_id)
+        prompt = await admin_hold_order(order_id=order_id)
         assert prompt["confirmation_required"] is True
-        
+
         # Confirm
-        result = await hold_fn(order_id=order_id, confirm=True)
+        result = await admin_hold_order(order_id=order_id, confirm=True)
         assert result["success"] is True
         assert result["action"] == "held"
-        
+
         # Verify status via REST
         async with MagentoClient.from_config() as client:
             order = await client.get(f"/V1/orders/{order_id}")
@@ -113,10 +109,10 @@ class TestOrderActionsIntegration:
 
         # 2. Unhold
         log.info("Attempting to unhold order %d...", order_id)
-        prompt = await unhold_fn(order_id=order_id)
+        prompt = await admin_unhold_order(order_id=order_id)
         assert prompt["confirmation_required"] is True
-        
-        result = await unhold_fn(order_id=order_id, confirm=True)
+
+        result = await admin_unhold_order(order_id=order_id, confirm=True)
         assert result["success"] is True
         assert result["action"] == "unheld"
 
