@@ -38,7 +38,7 @@ COPY --from=builder /install /usr/local
 # Environment defaults — only non-secret values
 ENV MAGEMCP_LOG_LEVEL=INFO \
     MAGENTO_STORE_CODE=default
-# MAGENTO_BASE_URL and MAGENTO_TOKEN must be provided at runtime (secrets)
+# MAGENTO_BASE_URL and MAGEMCP_ADMIN_TOKEN must be provided at runtime (secrets)
 
 # Switch to non-root user
 USER magemcp

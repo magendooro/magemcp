@@ -2,14 +2,20 @@
 # MageMCP — Docker Compose
 # =============================================================================
 # Usage:
-#   cp .env.example .env   # fill in your Magento credentials
+#   cp .env.example .env   # fill in MAGENTO_BASE_URL and MAGEMCP_ADMIN_TOKEN
 #   docker compose up -d
 #   docker compose logs -f magemcp
 
 services:
   magemcp:
     build: .
-    env_file: .env
+    environment:
+      - MAGENTO_BASE_URL=${MAGENTO_BASE_URL}
+      - MAGEMCP_ADMIN_TOKEN=${MAGEMCP_ADMIN_TOKEN}
+      - MAGENTO_STORE_CODE=${MAGENTO_STORE_CODE:-default}
+      - MAGENTO_CUSTOMER_TOKEN=${MAGENTO_CUSTOMER_TOKEN:-}
+      - MAGEMCP_LOG_LEVEL=${MAGEMCP_LOG_LEVEL:-INFO}
+      - MAGEMCP_SKIP_CONFIRMATION=${MAGEMCP_SKIP_CONFIRMATION:-}
     # stdio transport requires stdin to stay open
     stdin_open: true
     tty: true
@@ -27,7 +33,13 @@ services:
     build:
       context: .
       target: builder
-    env_file: .env
+    environment:
+      - MAGENTO_BASE_URL=${MAGENTO_BASE_URL}
+      - MAGEMCP_ADMIN_TOKEN=${MAGEMCP_ADMIN_TOKEN}
+      - MAGENTO_STORE_CODE=${MAGENTO_STORE_CODE:-default}
+      - MAGENTO_CUSTOMER_TOKEN=${MAGENTO_CUSTOMER_TOKEN:-}
+      - MAGEMCP_LOG_LEVEL=${MAGEMCP_LOG_LEVEL:-DEBUG}
+      - MAGEMCP_SKIP_CONFIRMATION=${MAGEMCP_SKIP_CONFIRMATION:-}
     stdin_open: true
     tty: true
     working_dir: /build
