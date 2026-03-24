@@ -8,10 +8,16 @@ Dual-namespace tool registration:
 from __future__ import annotations
 
 import logging
+import os
 
 from mcp.server.fastmcp import FastMCP
 
 log = logging.getLogger(__name__)
+
+# Host/port are only used when MAGEMCP_TRANSPORT=streamable-http.
+# For stdio (default) these values are ignored.
+_host = os.getenv("MAGEMCP_HOST", "127.0.0.1")
+_port = int(os.getenv("MAGEMCP_PORT", "8000"))
 
 mcp = FastMCP(
     "MageMCP",
@@ -21,6 +27,8 @@ mcp = FastMCP(
         "admin_* tools: admin operations via REST API (orders, customers, inventory "
         "— full access, no PII masking). "
     ),
+    host=_host,
+    port=_port,
 )
 
 # ---------------------------------------------------------------------------
@@ -99,8 +107,9 @@ register_order_actions(mcp)
 def main() -> None:
     """Entry point for the MageMCP server."""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(name)s  %(message)s")
-    log.info("Starting MageMCP server …")
-    mcp.run(transport="stdio")
+    transport = os.getenv("MAGEMCP_TRANSPORT", "stdio")
+    log.info("Starting MageMCP server (transport=%s) …", transport)
+    mcp.run(transport=transport)
 
 
 if __name__ == "__main__":

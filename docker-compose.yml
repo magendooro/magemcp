@@ -1,12 +1,24 @@
 # =============================================================================
 # MageMCP — Docker Compose
 # =============================================================================
-# Usage:
-#   cp .env.example .env   # fill in MAGENTO_BASE_URL and MAGEMCP_ADMIN_TOKEN
-#   docker compose up -d
-#   docker compose logs -f magemcp
+# Profiles:
+#   (default)  stdio transport — spawned per-session by MCP clients
+#   http        streamable-http transport — persistent server behind a reverse proxy
+#   dev         mounts source for live editing (stdio)
+#
+# Usage — stdio (MCP client spawns on demand):
+#   docker compose build magemcp
+#   # then point your MCP client at this compose file (see USAGE.md)
+#
+# Usage — HTTP (dedicated server):
+#   docker compose --profile http up -d magemcp-http
+#   docker compose --profile http logs -f magemcp-http
 
 services:
+
+  # ---------------------------------------------------------------------------
+  # stdio transport — default, spawned per-session by the MCP client
+  # ---------------------------------------------------------------------------
   magemcp:
     build: .
     environment:
@@ -19,16 +31,35 @@ services:
     # stdio transport requires stdin to stay open
     stdin_open: true
     tty: true
-    # The container needs outbound network access to reach the Magento instance.
-    # Default bridge network is sufficient.
-    #
-    # When HTTP transport is added, expose the port:
-    #   ports:
-    #     - "8000:8000"
 
+  # ---------------------------------------------------------------------------
+  # HTTP transport — persistent server, sits behind nginx/Caddy
+  # Usage: docker compose --profile http up -d magemcp-http
+  # ---------------------------------------------------------------------------
+  magemcp-http:
+    build: .
+    environment:
+      - MAGENTO_BASE_URL=${MAGENTO_BASE_URL}
+      - MAGEMCP_ADMIN_TOKEN=${MAGEMCP_ADMIN_TOKEN}
+      - MAGENTO_STORE_CODE=${MAGENTO_STORE_CODE:-default}
+      - MAGENTO_CUSTOMER_TOKEN=${MAGENTO_CUSTOMER_TOKEN:-}
+      - MAGEMCP_LOG_LEVEL=${MAGEMCP_LOG_LEVEL:-INFO}
+      - MAGEMCP_SKIP_CONFIRMATION=${MAGEMCP_SKIP_CONFIRMATION:-}
+      - MAGEMCP_TRANSPORT=streamable-http
+      - MAGEMCP_HOST=0.0.0.0
+      - MAGEMCP_PORT=8000
+    # Bind only to localhost on the host — nginx proxies inbound HTTPS
+    ports:
+      - "127.0.0.1:8000:8000"
+    restart: unless-stopped
+    profiles:
+      - http
+
+  # ---------------------------------------------------------------------------
   # Development profile — mounts source into builder stage for live editing
   # Usage: docker compose --profile dev up magemcp-dev --build
   # The builder stage has hatchling available so editable install works.
+  # ---------------------------------------------------------------------------
   magemcp-dev:
     build:
       context: .

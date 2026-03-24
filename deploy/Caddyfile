@@ -1,0 +1,38 @@
+# =============================================================================
+# MageMCP — Caddy reverse proxy
+# =============================================================================
+# Caddy handles TLS automatically via Let's Encrypt.
+#
+# Prerequisites:
+#   - Caddy 2.x installed (https://caddyserver.com/docs/install)
+#   - DNS A record pointing your domain to this server
+#   - MageMCP running: docker compose --profile http up -d magemcp-http
+#   - Environment variables set:
+#       export MCP_DOMAIN=mcp.example.com
+#       export MAGEMCP_API_KEY=your-secret-key-here
+#
+# Usage:
+#   envsubst < deploy/Caddyfile | sudo tee /etc/caddy/Caddyfile
+#   sudo systemctl reload caddy
+#
+# Or for a quick test (foreground):
+#   MCP_DOMAIN=mcp.example.com MAGEMCP_API_KEY=secret caddy run --config deploy/Caddyfile --adapter caddyfile
+# =============================================================================
+
+${MCP_DOMAIN} {
+
+    @authorized header Authorization "Bearer ${MAGEMCP_API_KEY}"
+
+    # Authenticated requests → MageMCP
+    handle @authorized {
+        reverse_proxy localhost:8000 {
+            # Disable response buffering — required for SSE streaming
+            flush_interval -1
+        }
+    }
+
+    # Everything else → 401
+    handle {
+        respond "Unauthorized" 401
+    }
+}
