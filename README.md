@@ -8,6 +8,7 @@ Connects AI agents to a live Magento instance via REST and GraphQL APIs — 60 t
 |---|---|
 | **Deployment** | [docs/deployment.md](docs/deployment.md) — installation, Docker, SSH, HTTP, reverse proxy |
 | **Usage scenarios** | [docs/scenarios.md](docs/scenarios.md) — example agent conversations by domain |
+| **Use cases by role** | [docs/use-cases.md](docs/use-cases.md) — SEO, merchandiser, support, ops, sales, CEO, CTO |
 
 ## Architecture
 
