@@ -123,7 +123,7 @@ class PolicyEngine:
         success = result.get("ok", result.get("success", False)) is True
         entry: dict[str, Any] = {
             "tool": tool_name,
-            "params": {k: v for k, v in params.items() if k != "confirm"},
+            "params": {k: v for k, v in params.items() if k not in ("confirm", "ctx")},
             "success": success,
             "duration_ms": round(duration_ms, 1),
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
