@@ -1463,3 +1463,81 @@ class TestAdminProducts:
         assert "products" in result
         for p in result["products"]:
             assert p["sku"].startswith("24-MB")
+
+
+# ---------------------------------------------------------------------------
+# CMS tools integration
+# ---------------------------------------------------------------------------
+
+
+class TestCmsTools:
+    """Integration tests for admin CMS tools."""
+
+    async def test_get_cms_home_page(self) -> None:
+        """Search for the Magento sample 'home' CMS page."""
+        from magemcp.connectors.rest_client import RESTClient
+        params = RESTClient.search_params(filters={"identifier": "home"}, page_size=1)
+        async with RESTClient.from_env() as client:
+            data = await client.get("/V1/cmsPage/search", params=params)
+
+        assert "items" in data
+        if not data["items"]:
+            pytest.skip("No 'home' CMS page in this instance")
+
+        page = data["items"][0]
+        assert page["identifier"] == "home"
+        assert page.get("content")
+        log.info("CMS home page: title=%s content_len=%d", page.get("title"), len(page.get("content", "")))
+
+    async def test_tool_get_cms_page_by_identifier(self) -> None:
+        """admin_get_cms_page by identifier returns parsed page."""
+        from magemcp.tools.admin.cms import admin_get_cms_page
+        result = await admin_get_cms_page(identifier="home")
+
+        if "error" in result:
+            pytest.skip("'home' CMS page not available")
+
+        assert result["identifier"] == "home"
+        assert result["content"]
+        log.info("admin_get_cms_page home: title=%s", result.get("title"))
+
+    async def test_tool_search_cms_pages(self) -> None:
+        """admin_search_cms_pages returns page list."""
+        from magemcp.tools.admin.cms import admin_search_cms_pages
+        result = await admin_search_cms_pages(is_active=True, page_size=5)
+
+        assert "pages" in result
+        assert "total_count" in result
+        log.info("CMS pages: %d total active", result["total_count"])
+
+
+# ---------------------------------------------------------------------------
+# Promotions tools integration
+# ---------------------------------------------------------------------------
+
+
+class TestPromotionTools:
+    """Integration tests for admin promotions tools."""
+
+    async def test_tool_search_sales_rules(self) -> None:
+        """admin_search_sales_rules returns rules list."""
+        from magemcp.tools.admin.promotions import admin_search_sales_rules
+        result = await admin_search_sales_rules(page_size=5)
+
+        assert "rules" in result
+        assert "total_count" in result
+        log.info("Sales rules: %d total", result["total_count"])
+        if result["rules"]:
+            r = result["rules"][0]
+            assert "rule_id" in r
+            assert "name" in r
+            log.info("First rule: id=%s name=%s active=%s", r["rule_id"], r["name"], r["is_active"])
+
+    async def test_tool_search_active_rules(self) -> None:
+        """Filter by is_active=True returns only active rules."""
+        from magemcp.tools.admin.promotions import admin_search_sales_rules
+        result = await admin_search_sales_rules(is_active=True, page_size=10)
+
+        assert "rules" in result
+        for rule in result["rules"]:
+            assert rule["is_active"] is True

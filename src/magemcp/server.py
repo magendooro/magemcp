@@ -83,6 +83,14 @@ from magemcp.tools.admin.products import register_product_tools
 
 register_product_tools(mcp)
 
+from magemcp.tools.admin.cms import register_cms_tools
+
+register_cms_tools(mcp)
+
+from magemcp.tools.admin.promotions import register_promotion_tools
+
+register_promotion_tools(mcp)
+
 from magemcp.tools.admin.order_actions import register_order_actions
 
 register_order_actions(mcp)
