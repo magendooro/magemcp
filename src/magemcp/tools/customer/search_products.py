@@ -9,6 +9,8 @@ from mcp.server.fastmcp import FastMCP
 
 from magemcp.connectors.graphql_client import GraphQLClient
 from magemcp.models.catalog import (
+    Aggregation,
+    AggregationOption,
     CSearchProductsInput,
     CSearchProductsOutput,
     PageInfo,
@@ -61,6 +63,12 @@ query SearchProducts(
     }
     total_count
     page_info { current_page page_size total_pages }
+    aggregations {
+      attribute_code
+      label
+      count
+      options { label value count }
+    }
   }
 }
 """
@@ -91,6 +99,9 @@ def _build_variables(inp: CSearchProductsInput) -> dict[str, Any]:
         if inp.price_to is not None:
             price_filter["to"] = str(inp.price_to)
         filt["price"] = price_filter
+    if inp.attributes:
+        for attr_code, attr_value in inp.attributes.items():
+            filt[attr_code] = {"eq": str(attr_value)}
     if filt:
         variables["filter"] = filt
 
@@ -144,6 +155,27 @@ def _parse_product(item: dict[str, Any]) -> StorefrontProduct:
     )
 
 
+def _parse_aggregations(raw_aggs: list[dict[str, Any]]) -> list[Aggregation]:
+    """Parse raw GraphQL aggregation data into Aggregation models."""
+    aggregations: list[Aggregation] = []
+    for agg in raw_aggs:
+        options = [
+            AggregationOption(
+                label=opt["label"],
+                value=str(opt["value"]),
+                count=opt["count"],
+            )
+            for opt in agg.get("options") or []
+        ]
+        aggregations.append(Aggregation(
+            attribute_code=agg["attribute_code"],
+            label=agg.get("label", agg["attribute_code"]),
+            count=agg.get("count", len(options)),
+            options=options,
+        ))
+    return aggregations
+
+
 def _parse_response(
     data: dict[str, Any],
     in_stock_only: bool,
@@ -158,6 +190,7 @@ def _parse_response(
         products = [p for p in products if p.stock_status == "IN_STOCK"]
 
     page_info_raw = products_data["page_info"]
+    raw_aggs = products_data.get("aggregations") or []
 
     return CSearchProductsOutput(
         products=products,
@@ -167,6 +200,7 @@ def _parse_response(
             page_size=page_info_raw["page_size"],
             total_pages=page_info_raw["total_pages"],
         ),
+        aggregations=_parse_aggregations(raw_aggs),
     )
 
 
@@ -180,6 +214,7 @@ async def c_search_products(
     category_id: str | None = None,
     price_from: float | None = None,
     price_to: float | None = None,
+    attributes: dict[str, str] | None = None,
     in_stock_only: bool = False,
     store_scope: str = "default",
     page_size: int = 20,
@@ -193,6 +228,7 @@ async def c_search_products(
         category_id=category_id,
         price_from=price_from,
         price_to=price_to,
+        attributes=attributes,
         in_stock_only=in_stock_only,
         store_scope=store_scope,
         page_size=page_size,
@@ -225,6 +261,11 @@ def register_search_products(mcp: FastMCP) -> None:
             "exactly what a shopper sees (no disabled/hidden products). "
             "Returns SKU, name, url_key, stock_status (IN_STOCK/OUT_OF_STOCK), "
             "regular and final pricing with any discount percent, and thumbnail image. "
+            "Also returns aggregations (faceted filters): available brands, sizes, colors, "
+            "price ranges, and other custom attributes with product counts per option. "
+            "Use aggregation option 'value' fields as input to the 'attributes' parameter "
+            "to filter by brand, color, size, or any custom attribute "
+            "(e.g. attributes={\"brand\": \"115\"} to filter by Bvlgari). "
             "Use in_stock_only=True to filter to orderable items. "
             "sort_field: relevance (default with search term), name, price. "
             "Use c_get_product for full description, images, and configurable options."

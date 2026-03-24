@@ -50,6 +50,14 @@ class CSearchProductsInput(BaseModel):
         description="Maximum price filter.",
         ge=0,
     )
+    attributes: dict[str, str] | None = Field(
+        default=None,
+        description=(
+            "Custom attribute filters as {attribute_code: value} pairs. "
+            "Use aggregation option 'value' fields from a previous search. "
+            "Example: {\"brand\": \"115\", \"concentratie\": \"3836\"}"
+        ),
+    )
     in_stock_only: bool = Field(
         default=False,
         description="If true, only return products that are IN_STOCK.",
@@ -119,12 +127,30 @@ class PageInfo(BaseModel):
     total_pages: int
 
 
+class AggregationOption(BaseModel):
+    """A single option within a search aggregation (facet bucket)."""
+
+    label: str
+    value: str
+    count: int
+
+
+class Aggregation(BaseModel):
+    """A search aggregation (facet) with its available options."""
+
+    attribute_code: str
+    label: str
+    count: int
+    options: list[AggregationOption] = Field(default_factory=list)
+
+
 class CSearchProductsOutput(BaseModel):
-    """Paginated storefront product search results."""
+    """Paginated storefront product search results with aggregations."""
 
     products: list[StorefrontProduct]
     total_count: int
     page_info: PageInfo
+    aggregations: list[Aggregation] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
