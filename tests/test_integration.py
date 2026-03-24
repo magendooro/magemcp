@@ -1401,18 +1401,29 @@ class TestGetCustomerEnhanced:
 class TestAdminProducts:
     """Integration tests for admin product tools."""
 
-    async def test_get_product_24_mb01(self) -> None:
-        """Get Magento sample data product by SKU."""
+    async def test_get_product_by_discovered_sku(self) -> None:
+        """Get a real product from the catalog via REST."""
         from magemcp.connectors.rest_client import RESTClient
+        # Discover a real SKU via REST (admin endpoint, not GraphQL)
+        params = RESTClient.search_params(page_size=1, sort_field="entity_id", sort_direction="ASC")
         async with RESTClient.from_env() as client:
-            product = await client.get("/V1/products/24-MB01")
+            data = await client.get("/V1/products", params=params)
 
-        assert product["sku"] == "24-MB01"
+        items = data.get("items") or []
+        if not items:
+            pytest.skip("No products in catalog")
+
+        sku = items[0]["sku"]
+        async with RESTClient.from_env() as client:
+            product = await client.get(f"/V1/products/{sku}")
+
+        assert product["sku"] == sku
         assert product["name"]
         assert "price" in product
         assert "media_gallery_entries" in product
         log.info(
-            "Product 24-MB01: name=%s price=%s media=%d",
+            "Product %s: name=%s price=%s media=%d",
+            sku,
             product["name"],
             product["price"],
             len(product.get("media_gallery_entries") or []),
@@ -1420,19 +1431,28 @@ class TestAdminProducts:
 
     async def test_tool_get_product(self) -> None:
         """admin_get_product returns parsed ProductDetail."""
+        from magemcp.connectors.rest_client import RESTClient
         from magemcp.tools.admin.products import admin_get_product
-        result = await admin_get_product(sku="24-MB01")
 
-        if "error" in result:
-            pytest.skip("24-MB01 not in this Magento instance")
+        params = RESTClient.search_params(page_size=1, sort_field="entity_id", sort_direction="ASC")
+        async with RESTClient.from_env() as client:
+            data = await client.get("/V1/products", params=params)
 
-        assert result["sku"] == "24-MB01"
+        items = data.get("items") or []
+        if not items:
+            pytest.skip("No products in catalog")
+
+        sku = items[0]["sku"]
+        result = await admin_get_product(sku=sku)
+
+        assert result["sku"] == sku
         assert result["name"]
         assert "stock" in result
         assert "media_gallery" in result
         assert "custom_attributes" in result
         log.info(
-            "admin_get_product 24-MB01: stock_qty=%s description_len=%s",
+            "admin_get_product %s: stock_qty=%s description_len=%s",
+            sku,
             result.get("stock", {}).get("qty") if result.get("stock") else "n/a",
             len(result.get("custom_attributes", {}).get("description") or ""),
         )
