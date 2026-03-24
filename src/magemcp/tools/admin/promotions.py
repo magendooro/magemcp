@@ -7,6 +7,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
+from magemcp.connectors.errors import MagentoNotFoundError
 from magemcp.connectors.rest_client import RESTClient
 from magemcp.tools.admin._confirmation import needs_confirmation
 
@@ -94,7 +95,7 @@ async def admin_get_sales_rule(
         raw = await client.get(f"/V1/salesRules/{rule_id}", store_code=store_scope)
 
     if not raw or "rule_id" not in raw:
-        return {"error": f"Sales rule {rule_id} not found."}
+        raise MagentoNotFoundError(f"Sales rule {rule_id} not found.")
 
     # Return full rule including conditions/actions
     return {
@@ -167,29 +168,32 @@ def register_promotion_tools(mcp: FastMCP) -> None:
 
     mcp.tool(
         name="admin_search_sales_rules",
+        title="Search Sales Rules",
         description=(
             "Search cart price rules (promotions) by name or active status. "
             "Name filter supports wildcards. Returns rule summaries including "
             "discount type, coupon type, and validity dates."
         ),
-        annotations={"readOnlyHint": True, "destructiveHint": False, "openWorldHint": True},
+        annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
     )(admin_search_sales_rules)
 
     mcp.tool(
         name="admin_get_sales_rule",
+        title="Get Sales Rule",
         description=(
             "Get full detail for a cart price rule by ID, including conditions, "
             "actions, discount configuration, and usage statistics."
         ),
-        annotations={"readOnlyHint": True, "destructiveHint": False, "openWorldHint": True},
+        annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
     )(admin_get_sales_rule)
 
     mcp.tool(
         name="admin_generate_coupons",
+        title="Generate Coupons",
         description=(
             "Generate coupon codes for a cart price rule. "
             "format: 'alphanum' (default), 'alpha', or 'num'. "
             "Requires confirmation — call with confirm=True to proceed."
         ),
-        annotations={"readOnlyHint": False, "destructiveHint": True, "openWorldHint": True},
+        annotations={"readOnlyHint": False, "destructiveHint": True, "idempotentHint": False, "openWorldHint": True},
     )(admin_generate_coupons)

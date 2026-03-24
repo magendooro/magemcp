@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
 from magemcp.connectors.graphql_client import GraphQLClient
+from magemcp.utils.cache import TTLCache
 
 log = logging.getLogger(__name__)
+
+_cache = TTLCache(ttl=float(os.getenv("MAGEMCP_CACHE_STORE_CONFIG_TTL", "300")))
 
 STORE_CONFIG_QUERY = """
 query StoreConfig {
@@ -47,6 +51,7 @@ def register_store_config(mcp: FastMCP) -> None:
 
     @mcp.tool(
         name="c_get_store_config",
+        title="Get Store Config",
         description=(
             "Get store configuration: locale, currency, URLs, catalog settings, "
             "CMS pages, and SEO defaults."
@@ -54,6 +59,7 @@ def register_store_config(mcp: FastMCP) -> None:
         annotations={
             "readOnlyHint": True,
             "destructiveHint": False,
+            "idempotentHint": True,
             "openWorldHint": True,
         },
     )
@@ -61,7 +67,15 @@ def register_store_config(mcp: FastMCP) -> None:
         store_scope: str = "default",
     ) -> dict[str, Any]:
         """Get store configuration."""
+        cache_key = f"store_config:{store_scope}"
+        cached = _cache.get(cache_key)
+        if cached is not None:
+            log.debug("c_get_store_config cache hit store=%s", store_scope)
+            return cached
+
         log.info("c_get_store_config store=%s", store_scope)
         async with GraphQLClient.from_env() as client:
             data = await client.query(STORE_CONFIG_QUERY, store_code=store_scope)
-        return data["storeConfig"]
+        result = data["storeConfig"]
+        _cache.set(cache_key, result)
+        return result

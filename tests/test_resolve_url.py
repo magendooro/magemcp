@@ -8,7 +8,7 @@ import httpx
 import pytest
 import respx
 
-from magemcp.connectors.errors import MagentoError
+from magemcp.connectors.errors import MagentoError, MagentoNotFoundError
 from magemcp.connectors.graphql_client import GraphQLClient
 from magemcp.tools.customer.resolve_url import CResolveUrlInput, _parse_route
 
@@ -81,8 +81,8 @@ class TestParseRoute:
         assert result["title"] == "About Us"
 
     def test_null_route(self) -> None:
-        result = _parse_route(None)
-        assert result == {"error": "URL not found"}
+        with pytest.raises(MagentoNotFoundError):
+            _parse_route(None)
 
     def test_unknown_type(self) -> None:
         route = {"__typename": "FutureType", "id": "123"}
@@ -190,8 +190,8 @@ class TestToolEndToEnd:
                 variables={"url": "nonexistent-page-xyz"},
             )
 
-        result = _parse_route(data["route"])
-        assert result == {"error": "URL not found"}
+        with pytest.raises(MagentoNotFoundError):
+            _parse_route(data["route"])
 
     @respx.mock
     async def test_store_header_sent(self) -> None:

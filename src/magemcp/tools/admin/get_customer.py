@@ -7,6 +7,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
+from magemcp.connectors.errors import MagentoNotFoundError
 from magemcp.connectors.rest_client import RESTClient
 from magemcp.models.customer import CGetCustomerInput, CGetCustomerOutput, CustomerAddress
 
@@ -84,6 +85,7 @@ def register_get_customer(mcp: FastMCP) -> None:
 
     @mcp.tool(
         name="admin_get_customer",
+        title="Get Customer",
         description=(
             "Look up a customer by internal ID or email address. Returns full customer "
             "profile including name, email, DOB, customer group, account dates, all "
@@ -92,6 +94,7 @@ def register_get_customer(mcp: FastMCP) -> None:
         annotations={
             "readOnlyHint": True,
             "destructiveHint": False,
+            "idempotentHint": True,
             "openWorldHint": True,
         },
     )
@@ -143,7 +146,7 @@ def register_get_customer(mcp: FastMCP) -> None:
 
         items = data.get("items") or []
         if not items:
-            return {"error": "Customer not found."}
+            raise MagentoNotFoundError("Customer not found.")
 
         result = parse_customer(items[0])
         return result.model_dump(mode="json")

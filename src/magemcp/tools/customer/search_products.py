@@ -180,6 +180,7 @@ def register_search_products(mcp: FastMCP) -> None:
 
     @mcp.tool(
         name="c_search_products",
+        title="Search Products",
         description=(
             "Search the product catalog as a shopper would see it. "
             "Returns storefront-visible products with pricing, images, and stock status."
@@ -187,6 +188,7 @@ def register_search_products(mcp: FastMCP) -> None:
         annotations={
             "readOnlyHint": True,
             "destructiveHint": False,
+            "idempotentHint": True,
             "openWorldHint": True,
         },
     )

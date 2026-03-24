@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from collections import defaultdict
+from functools import wraps
 from typing import Any
+
+from magemcp.connectors.errors import MagentoRateLimitError
 
 audit_log = logging.getLogger("magemcp.audit")
 
@@ -34,13 +38,16 @@ class PolicyEngine:
         duration_ms: float,
     ) -> None:
         """Emit a structured JSON audit log entry."""
-        audit_log.info(json.dumps({
+        entry: dict[str, Any] = {
             "tool": tool_name,
             "params": {k: v for k, v in params.items() if k != "confirm"},
-            "success": result.get("success", False),
+            "success": result.get("ok", result.get("success", False)) is True,
             "duration_ms": round(duration_ms, 1),
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        }))
+        }
+        if "error" in result:
+            entry["error"] = result["error"]
+        audit_log.info(json.dumps(entry))
 
 
 # ---------------------------------------------------------------------------
@@ -85,3 +92,31 @@ def classify_tool(tool_name: str) -> str:
     if tool_name in WRITE_TOOLS:
         return "write"
     return "read"
+
+
+# ---------------------------------------------------------------------------
+# Module-level engine singleton + with_policy decorator
+# ---------------------------------------------------------------------------
+
+_engine = PolicyEngine()
+
+
+def with_policy(tool_name: str):
+    """Decorator that applies rate limiting and audit logging to a tool handler."""
+    _limit = int(os.getenv("MAGEMCP_RATE_LIMIT", "60"))
+
+    def decorator(fn: Any) -> Any:
+        @wraps(fn)
+        async def wrapper(*args: Any, **kwargs: Any) -> Any:
+            if not _engine.check_rate_limit(tool_name, limit=_limit):
+                raise MagentoRateLimitError(f"Rate limit exceeded for {tool_name}")
+            t0 = time.monotonic()
+            try:
+                result = await fn(*args, **kwargs)
+                _engine.log_action(tool_name, kwargs, {"ok": True}, (time.monotonic() - t0) * 1000)
+                return result
+            except Exception as e:
+                _engine.log_action(tool_name, kwargs, {"error": str(e)}, (time.monotonic() - t0) * 1000)
+                raise
+        return wrapper
+    return decorator

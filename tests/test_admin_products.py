@@ -9,6 +9,7 @@ import pytest
 import respx
 from httpx import Response
 
+from magemcp.connectors.errors import MagentoNotFoundError
 from magemcp.models.product import ProductDetail, ProductSummary
 from magemcp.tools.admin.products import (
     _parse_product_detail,
@@ -357,10 +358,10 @@ class TestUpdateProductMultipleFields:
         assert "description" in attr_codes
         assert "meta_title" in attr_codes
 
-    async def test_no_fields_returns_error(self, mock_env: None) -> None:
-        """Calling update with no fields to change returns an error."""
-        result = await admin_update_product(sku="24-MB01", confirm=True)
-        assert "error" in result
+    async def test_no_fields_raises(self, mock_env: None) -> None:
+        """Calling update with no fields to change raises ValueError."""
+        with pytest.raises(ValueError):
+            await admin_update_product(sku="24-MB01", confirm=True)
 
     async def test_updated_fields_excludes_sku(self, mock_env: None, respx_mock: respx.MockRouter) -> None:
         """updated_fields list never includes 'sku'."""

@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from mcp.server.fastmcp import FastMCP
 
+from magemcp.connectors.errors import MagentoNotFoundError
 from magemcp.connectors.graphql_client import GraphQLClient
 
 log = logging.getLogger(__name__)
@@ -60,7 +61,7 @@ _PRODUCT_TYPES = {
 def _parse_route(route: dict[str, Any] | None) -> dict[str, Any]:
     """Parse the route response into a clean dict."""
     if route is None:
-        return {"error": "URL not found"}
+        raise MagentoNotFoundError("URL not found")
 
     typename = route.get("__typename", "Unknown")
     result: dict[str, Any] = {"type": typename}
@@ -89,6 +90,7 @@ def register_resolve_url(mcp: FastMCP) -> None:
 
     @mcp.tool(
         name="c_resolve_url",
+        title="Resolve URL",
         description=(
             "Resolve a SEO-friendly URL to a product, category, or CMS page. "
             "Returns the entity type and key identifiers (SKU, category UID, or CMS identifier)."
@@ -96,6 +98,7 @@ def register_resolve_url(mcp: FastMCP) -> None:
         annotations={
             "readOnlyHint": True,
             "destructiveHint": False,
+            "idempotentHint": True,
             "openWorldHint": True,
         },
     )

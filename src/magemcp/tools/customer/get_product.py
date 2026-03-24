@@ -7,6 +7,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
+from magemcp.connectors.errors import MagentoNotFoundError
 from magemcp.connectors.graphql_client import GraphQLClient
 from magemcp.models.catalog import (
     CategoryBreadcrumb,
@@ -182,6 +183,7 @@ def register_get_product(mcp: FastMCP) -> None:
 
     @mcp.tool(
         name="c_get_product",
+        title="Get Product",
         description=(
             "Fetch full product detail by SKU. Returns name, description, pricing, "
             "images, categories, stock status, and custom attributes."
@@ -189,6 +191,7 @@ def register_get_product(mcp: FastMCP) -> None:
         annotations={
             "readOnlyHint": True,
             "destructiveHint": False,
+            "idempotentHint": True,
             "openWorldHint": True,
         },
     )
@@ -210,7 +213,7 @@ def register_get_product(mcp: FastMCP) -> None:
 
         items = (data.get("products") or {}).get("items") or []
         if not items:
-            return {"error": f"Product with SKU '{inp.sku}' not found."}
+            raise MagentoNotFoundError(f"Product with SKU '{inp.sku}' not found.")
 
         result = _parse_product_detail(items[0])
         return result.model_dump(mode="json")

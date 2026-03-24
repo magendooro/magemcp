@@ -7,6 +7,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
+from magemcp.connectors.errors import MagentoNotFoundError
 from magemcp.connectors.rest_client import RESTClient
 from magemcp.models.order import (
     CGetOrderInput,
@@ -205,6 +206,7 @@ def register_get_order(mcp: FastMCP) -> None:
 
     @mcp.tool(
         name="admin_get_order",
+        title="Get Order",
         description=(
             "Fetch an order by its increment ID. Returns order status, "
             "totals, line items, shipment tracking, recent comments, "
@@ -213,6 +215,7 @@ def register_get_order(mcp: FastMCP) -> None:
         annotations={
             "readOnlyHint": True,
             "destructiveHint": False,
+            "idempotentHint": True,
             "openWorldHint": True,
         },
     )
@@ -247,7 +250,7 @@ def register_get_order(mcp: FastMCP) -> None:
 
         items = data.get("items") or []
         if not items:
-            return {"error": f"Order '{inp.increment_id}' not found."}
+            raise MagentoNotFoundError(f"Order '{inp.increment_id}' not found.")
 
         result = parse_order(items[0])
         return result.model_dump(mode="json")

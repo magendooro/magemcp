@@ -227,8 +227,9 @@ def register_cart_tools(mcp: FastMCP) -> None:
 
     @mcp.tool(
         name="c_create_cart",
+        title="Create Cart",
         description="Create an empty guest cart. Returns the cart ID for subsequent operations.",
-        annotations={"readOnlyHint": False, "destructiveHint": False, "openWorldHint": True},
+        annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": True},
     )
     async def c_create_cart(
         store_scope: str = "default",
@@ -244,11 +245,12 @@ def register_cart_tools(mcp: FastMCP) -> None:
 
     @mcp.tool(
         name="c_get_cart",
+        title="Get Cart",
         description=(
             "Get cart contents including items, prices, applied coupons, "
             "addresses, and selected shipping/payment methods."
         ),
-        annotations={"readOnlyHint": True, "destructiveHint": False, "openWorldHint": True},
+        annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
     )
     async def c_get_cart(
         cart_id: str,
@@ -269,8 +271,9 @@ def register_cart_tools(mcp: FastMCP) -> None:
 
     @mcp.tool(
         name="c_add_to_cart",
+        title="Add to Cart",
         description="Add a product to the cart by SKU. Returns updated cart.",
-        annotations={"readOnlyHint": False, "destructiveHint": False, "openWorldHint": True},
+        annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": True},
     )
     async def c_add_to_cart(
         cart_id: str,
@@ -296,7 +299,7 @@ def register_cart_tools(mcp: FastMCP) -> None:
         result = data["addProductsToCart"]
         user_errors = result.get("user_errors") or []
         if user_errors:
-            return {"error": user_errors[0]["message"], "code": user_errors[0].get("code")}
+            raise MagentoError(user_errors[0]["message"])
 
         return _parse_cart(result["cart"])
 
@@ -304,8 +307,9 @@ def register_cart_tools(mcp: FastMCP) -> None:
 
     @mcp.tool(
         name="c_update_cart_item",
+        title="Update Cart Item",
         description="Update item quantity in the cart. Set quantity=0 to remove the item.",
-        annotations={"readOnlyHint": False, "destructiveHint": False, "openWorldHint": True},
+        annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": True},
     )
     async def c_update_cart_item(
         cart_id: str,
@@ -346,8 +350,9 @@ def register_cart_tools(mcp: FastMCP) -> None:
 
     @mcp.tool(
         name="c_apply_coupon",
+        title="Apply Coupon",
         description="Apply a coupon code to the cart. Returns updated cart with discounts.",
-        annotations={"readOnlyHint": False, "destructiveHint": False, "openWorldHint": True},
+        annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": True},
     )
     async def c_apply_coupon(
         cart_id: str,
@@ -371,8 +376,9 @@ def register_cart_tools(mcp: FastMCP) -> None:
 
     @mcp.tool(
         name="c_set_guest_email",
+        title="Set Guest Email",
         description="Set the guest email on the cart (required before placing order).",
-        annotations={"readOnlyHint": False, "destructiveHint": False, "openWorldHint": True},
+        annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": True},
     )
     async def c_set_guest_email(
         cart_id: str,
@@ -394,11 +400,12 @@ def register_cart_tools(mcp: FastMCP) -> None:
 
     @mcp.tool(
         name="c_set_shipping_address",
+        title="Set Shipping Address",
         description=(
             "Set the shipping address on the cart. "
             "Returns available shipping methods for the address."
         ),
-        annotations={"readOnlyHint": False, "destructiveHint": False, "openWorldHint": True},
+        annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": True},
     )
     async def c_set_shipping_address(
         cart_id: str,
@@ -431,8 +438,9 @@ def register_cart_tools(mcp: FastMCP) -> None:
 
     @mcp.tool(
         name="c_set_billing_address",
+        title="Set Billing Address",
         description="Set the billing address on the cart.",
-        annotations={"readOnlyHint": False, "destructiveHint": False, "openWorldHint": True},
+        annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": True},
     )
     async def c_set_billing_address(
         cart_id: str,
@@ -465,8 +473,9 @@ def register_cart_tools(mcp: FastMCP) -> None:
 
     @mcp.tool(
         name="c_set_shipping_method",
+        title="Set Shipping Method",
         description="Set the shipping method on the cart (e.g., flatrate/flatrate).",
-        annotations={"readOnlyHint": False, "destructiveHint": False, "openWorldHint": True},
+        annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": True},
     )
     async def c_set_shipping_method(
         cart_id: str,
@@ -496,8 +505,9 @@ def register_cart_tools(mcp: FastMCP) -> None:
 
     @mcp.tool(
         name="c_set_payment_method",
+        title="Set Payment Method",
         description="Set the payment method on the cart (default: checkmo).",
-        annotations={"readOnlyHint": False, "destructiveHint": False, "openWorldHint": True},
+        annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": True},
     )
     async def c_set_payment_method(
         cart_id: str,
@@ -522,11 +532,12 @@ def register_cart_tools(mcp: FastMCP) -> None:
 
     @mcp.tool(
         name="c_place_order",
+        title="Place Order",
         description=(
             "Place the order. Requires cart to have items, addresses, shipping method, "
             "payment method, and guest email set. Returns the order number."
         ),
-        annotations={"readOnlyHint": False, "destructiveHint": True, "openWorldHint": True},
+        annotations={"readOnlyHint": False, "destructiveHint": True, "idempotentHint": False, "openWorldHint": True},
     )
     async def c_place_order(
         cart_id: str,
@@ -545,7 +556,7 @@ def register_cart_tools(mcp: FastMCP) -> None:
         result = data["placeOrder"]
         errors = result.get("errors") or []
         if errors:
-            return {"error": errors[0]["message"], "code": errors[0].get("code")}
+            raise MagentoError(errors[0]["message"])
 
         order = result["order"]
         return PlaceOrderResult(order_number=order["order_number"]).model_dump(mode="json")

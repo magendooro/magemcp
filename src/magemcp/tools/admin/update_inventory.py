@@ -70,6 +70,7 @@ def register_update_inventory(mcp: FastMCP) -> None:
     """Register the admin_update_inventory tool on the given MCP server."""
     mcp.tool(
         name="admin_update_inventory",
+        title="Update Inventory",
         description=(
             "Update the inventory source item quantity for a SKU. "
             "Uses the Magento MSI source-items endpoint. "
@@ -78,6 +79,7 @@ def register_update_inventory(mcp: FastMCP) -> None:
         annotations={
             "readOnlyHint": False,
             "destructiveHint": True,
+            "idempotentHint": False,
             "openWorldHint": True,
         },
     )(admin_update_inventory)

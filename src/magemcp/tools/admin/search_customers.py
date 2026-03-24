@@ -9,6 +9,7 @@ from mcp.server.fastmcp import FastMCP
 
 from magemcp.connectors.rest_client import RESTClient
 from magemcp.models.customer import CustomerSummary
+from magemcp.utils.dates import parse_date_expr
 
 log = logging.getLogger(__name__)
 
@@ -63,7 +64,7 @@ async def admin_search_customers(
     if group_id is not None:
         filters["group_id"] = group_id
     if created_from:
-        filters["created_at"] = (created_from, "gteq")
+        filters["created_at"] = (parse_date_expr(created_from), "gteq")
 
     params = RESTClient.search_params(
         filters=filters or None,
@@ -100,6 +101,7 @@ def register_search_customers(mcp: FastMCP) -> None:
     """Register the admin_search_customers tool on the given MCP server."""
     mcp.tool(
         name="admin_search_customers",
+        title="Search Customers",
         description=(
             "Search customers by email, name, group, or creation date. "
             "Email and name filters support wildcards (e.g. %@example.com). "
@@ -108,6 +110,7 @@ def register_search_customers(mcp: FastMCP) -> None:
         annotations={
             "readOnlyHint": True,
             "destructiveHint": False,
+            "idempotentHint": True,
             "openWorldHint": True,
         },
     )(admin_search_customers)

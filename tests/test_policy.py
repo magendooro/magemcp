@@ -4,16 +4,21 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import time
 from unittest.mock import patch
 
 import pytest
 
+from magemcp.connectors.errors import MagentoRateLimitError
 from magemcp.policy.engine import (
     DESTRUCTIVE_TOOLS,
+    PolicyEngine,
     READ_TOOLS,
     WRITE_TOOLS,
-    PolicyEngine,
+    _engine,
     classify_tool,
+    with_policy,
 )
 
 
@@ -175,3 +180,63 @@ class TestToolClassification:
         """A tool cannot be in both DESTRUCTIVE_TOOLS and WRITE_TOOLS."""
         overlap = DESTRUCTIVE_TOOLS & WRITE_TOOLS
         assert overlap == frozenset(), f"Overlap found: {overlap}"
+
+
+# ---------------------------------------------------------------------------
+# with_policy decorator
+# ---------------------------------------------------------------------------
+
+
+class TestWithPolicy:
+    async def test_passes_through_result(self) -> None:
+        """with_policy calls the wrapped function and returns its result."""
+        async def my_tool(x: int) -> dict:
+            return {"value": x * 2}
+
+        wrapped = with_policy("test_tool_pass")(my_tool)
+        result = await wrapped(x=5)
+        assert result == {"value": 10}
+
+    async def test_raises_rate_limit_error(self) -> None:
+        """with_policy raises MagentoRateLimitError when rate limit is exceeded."""
+        tool_name = "test_tool_rate_limit_xyz"
+        limit = int(os.getenv("MAGEMCP_RATE_LIMIT", "60"))
+        # Fill the sliding-window counter directly to trigger the limit
+        _engine._rate_counters[tool_name] = [time.time()] * limit
+
+        async def my_tool() -> dict:
+            return {"ok": True}
+
+        wrapped = with_policy(tool_name)(my_tool)
+        with pytest.raises(MagentoRateLimitError):
+            await wrapped()
+
+    async def test_audit_log_on_success(self, caplog: pytest.LogCaptureFixture) -> None:
+        """with_policy emits an audit log entry on successful tool call."""
+        async def my_tool(order_id: str) -> dict:
+            return {"found": True}
+
+        wrapped = with_policy("test_tool_audit")(my_tool)
+        with caplog.at_level(logging.INFO, logger="magemcp.audit"):
+            await wrapped(order_id="000001")
+
+        audit_records = [r for r in caplog.records if r.name == "magemcp.audit"]
+        assert audit_records, "Expected audit log entry"
+        entry = json.loads(audit_records[0].message)
+        assert entry["tool"] == "test_tool_audit"
+
+    async def test_audit_log_on_exception(self, caplog: pytest.LogCaptureFixture) -> None:
+        """with_policy logs errors and re-raises the exception."""
+        async def bad_tool() -> dict:
+            raise ValueError("something went wrong")
+
+        wrapped = with_policy("test_tool_error")(bad_tool)
+        with caplog.at_level(logging.INFO, logger="magemcp.audit"):
+            with pytest.raises(ValueError, match="something went wrong"):
+                await wrapped()
+
+        audit_records = [r for r in caplog.records if r.name == "magemcp.audit"]
+        assert audit_records
+        entry = json.loads(audit_records[0].message)
+        assert entry["tool"] == "test_tool_error"
+        assert "something went wrong" in entry.get("error", "")

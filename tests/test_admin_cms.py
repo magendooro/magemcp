@@ -9,6 +9,7 @@ import pytest
 import respx
 from httpx import Response
 
+from magemcp.connectors.errors import MagentoNotFoundError
 from magemcp.tools.admin.cms import (
     _parse_page,
     admin_get_cms_page,
@@ -108,12 +109,12 @@ class TestGetCmsPage:
         respx_mock.get(f"{BASE_URL}/rest/{STORE_CODE}/V1/cmsPage/search").mock(
             return_value=Response(200, json=_wrap_search([]))
         )
-        result = await admin_get_cms_page(identifier="nonexistent")
-        assert "error" in result
+        with pytest.raises(MagentoNotFoundError):
+            await admin_get_cms_page(identifier="nonexistent")
 
     async def test_no_params_returns_error(self, mock_env: None) -> None:
-        result = await admin_get_cms_page()
-        assert "error" in result
+        with pytest.raises(ValueError):
+            await admin_get_cms_page()
 
 
 # ---------------------------------------------------------------------------
@@ -184,9 +185,9 @@ class TestUpdateCmsPage:
         payload = json.loads(respx_mock.calls.last.request.content)
         assert payload["page"]["is_active"] is False
 
-    async def test_no_fields_returns_error(self, mock_env: None) -> None:
-        result = await admin_update_cms_page(page_id=1, confirm=True)
-        assert "error" in result
+    async def test_no_fields_raises(self, mock_env: None) -> None:
+        with pytest.raises(ValueError):
+            await admin_update_cms_page(page_id=1, confirm=True)
 
     async def test_payload_wrapped_in_page_key(self, mock_env: None, respx_mock: respx.MockRouter) -> None:
         respx_mock.put(f"{BASE_URL}/rest/{STORE_CODE}/V1/cmsPage/1").mock(

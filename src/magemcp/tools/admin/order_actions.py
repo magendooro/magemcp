@@ -204,42 +204,49 @@ def register_order_actions(mcp: FastMCP) -> None:
 
     mcp.tool(
         name="admin_cancel_order",
+        title="Cancel Order",
         description="Cancel an order. Destructive action requiring confirmation.",
-        annotations={"readOnlyHint": False, "destructiveHint": True, "openWorldHint": True},
+        annotations={"readOnlyHint": False, "destructiveHint": True, "idempotentHint": False, "openWorldHint": True},
     )(admin_cancel_order)
 
     mcp.tool(
         name="admin_hold_order",
+        title="Hold Order",
         description="Put an order on hold. Destructive action requiring confirmation.",
-        annotations={"readOnlyHint": False, "destructiveHint": True, "openWorldHint": True},
+        annotations={"readOnlyHint": False, "destructiveHint": True, "idempotentHint": False, "openWorldHint": True},
     )(admin_hold_order)
 
     mcp.tool(
         name="admin_unhold_order",
+        title="Unhold Order",
         description="Release an order from hold. Destructive action requiring confirmation.",
-        annotations={"readOnlyHint": False, "destructiveHint": True, "openWorldHint": True},
+        annotations={"readOnlyHint": False, "destructiveHint": True, "idempotentHint": False, "openWorldHint": True},
     )(admin_unhold_order)
 
     mcp.tool(
         name="admin_add_order_comment",
+        title="Add Order Comment",
         description="Add a comment to an order history.",
-        annotations={"readOnlyHint": False, "destructiveHint": False, "openWorldHint": True},
+        annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": True},
     )(admin_add_order_comment)
 
     mcp.tool(
         name="admin_create_invoice",
+        title="Create Invoice",
         description="Create an invoice for an order (captures payment).",
-        annotations={"readOnlyHint": False, "destructiveHint": True, "openWorldHint": True},
+        annotations={"readOnlyHint": False, "destructiveHint": True, "idempotentHint": False, "openWorldHint": True},
     )(admin_create_invoice)
 
     mcp.tool(
         name="admin_create_shipment",
+        title="Create Shipment",
         description="Create a shipment for an order (with optional tracking).",
-        annotations={"readOnlyHint": False, "destructiveHint": True, "openWorldHint": True},
+        annotations={"readOnlyHint": False, "destructiveHint": True, "idempotentHint": False, "openWorldHint": True},
     )(admin_create_shipment)
 
     mcp.tool(
         name="admin_send_order_email",
+        title="Send Order Email",
         description="Resend the order confirmation email to the customer.",
-        annotations={"readOnlyHint": False, "destructiveHint": True, "openWorldHint": True},
+        annotations={"readOnlyHint": False, "destructiveHint": True, "idempotentHint": False, "openWorldHint": True},
     )(admin_send_order_email)

@@ -103,6 +103,19 @@ from magemcp.tools.admin.order_actions import register_order_actions
 
 register_order_actions(mcp)
 
+from magemcp.tools.admin.analytics import register_analytics
+
+register_analytics(mcp)
+
+# ---------------------------------------------------------------------------
+# Apply policy engine to all registered tools
+# ---------------------------------------------------------------------------
+
+from magemcp.policy.engine import with_policy
+
+for _tool_name, _tool_obj in mcp._tool_manager._tools.items():
+    _tool_obj.fn = with_policy(_tool_name)(_tool_obj.fn)
+
 
 def main() -> None:
     """Entry point for the MageMCP server."""

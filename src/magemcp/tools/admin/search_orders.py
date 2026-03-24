@@ -11,6 +11,7 @@ from mcp.server.fastmcp import FastMCP
 
 from magemcp.connectors.rest_client import RESTClient
 from magemcp.models.order import OrderSummary
+from magemcp.utils.dates import parse_date_expr
 
 log = logging.getLogger(__name__)
 
@@ -166,6 +167,7 @@ def register_search_orders(mcp: FastMCP) -> None:
 
     @mcp.tool(
         name="admin_search_orders",
+        title="Search Orders",
         description=(
             "Search orders with filters: status, customer email, date range, "
             "total amount range. Returns order summaries (not full detail). "
@@ -174,6 +176,7 @@ def register_search_orders(mcp: FastMCP) -> None:
         annotations={
             "readOnlyHint": True,
             "destructiveHint": False,
+            "idempotentHint": True,
             "openWorldHint": True,
         },
     )
@@ -194,8 +197,8 @@ def register_search_orders(mcp: FastMCP) -> None:
         inp = AdminSearchOrdersInput(
             status=status,
             customer_email=customer_email,
-            created_from=created_from,
-            created_to=created_to,
+            created_from=parse_date_expr(created_from) if created_from else None,
+            created_to=parse_date_expr(created_to) if created_to else None,
             grand_total_min=grand_total_min,
             grand_total_max=grand_total_max,
             page_size=page_size,

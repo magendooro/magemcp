@@ -7,6 +7,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
+from magemcp.connectors.errors import MagentoNotFoundError
 from magemcp.connectors.rest_client import RESTClient
 from magemcp.models.product import (
     MediaGalleryEntry,
@@ -217,7 +218,7 @@ async def admin_get_product(
         raw = await client.get(f"/V1/products/{sku}", store_code=store_scope)
 
     if not raw or "sku" not in raw:
-        return {"error": f"Product '{sku}' not found."}
+        raise MagentoNotFoundError(f"Product '{sku}' not found.")
 
     result = _parse_product_detail(raw)
     return result.model_dump(mode="json")
@@ -273,7 +274,7 @@ async def admin_update_product(
     ]
 
     if not updated_fields:
-        return {"error": "No fields to update. Provide at least one field to change."}
+        raise ValueError("No fields to update. Provide at least one field to change.")
 
     async with RESTClient.from_env() as client:
         await client.put(
@@ -295,29 +296,32 @@ def register_product_tools(mcp: FastMCP) -> None:
 
     mcp.tool(
         name="admin_search_products",
+        title="Search Products",
         description=(
             "Search products by name, SKU, type, status, visibility, or price range. "
             "Name and SKU filters support wildcards (e.g. %duffle%). "
             "Returns product summaries. Use admin_get_product for full detail."
         ),
-        annotations={"readOnlyHint": True, "destructiveHint": False, "openWorldHint": True},
+        annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
     )(admin_search_products)
 
     mcp.tool(
         name="admin_get_product",
+        title="Get Product",
         description=(
             "Get full product detail by SKU: all attributes, descriptions, media gallery, "
             "stock item, tier prices, customizable options, and category links."
         ),
-        annotations={"readOnlyHint": True, "destructiveHint": False, "openWorldHint": True},
+        annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
     )(admin_get_product)
 
     mcp.tool(
         name="admin_update_product",
+        title="Update Product",
         description=(
             "Update product attributes (name, price, status, weight, descriptions, meta fields). "
             "Only specified fields are changed — omitted fields are untouched. "
             "Requires confirmation — call with confirm=True to proceed."
         ),
-        annotations={"readOnlyHint": False, "destructiveHint": True, "openWorldHint": True},
+        annotations={"readOnlyHint": False, "destructiveHint": True, "idempotentHint": False, "openWorldHint": True},
     )(admin_update_product)

@@ -7,6 +7,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
+from magemcp.connectors.errors import MagentoNotFoundError
 from magemcp.connectors.rest_client import RESTClient
 from magemcp.tools.admin._confirmation import needs_confirmation
 
@@ -49,7 +50,7 @@ async def admin_get_cms_page(
 ) -> dict[str, Any]:
     """Get a CMS page by numeric ID or URL identifier."""
     if page_id is None and not identifier:
-        return {"error": "Provide either page_id or identifier."}
+        raise ValueError("Provide either page_id or identifier.")
 
     log.info("admin_get_cms_page id=%s identifier=%s", page_id, identifier)
 
@@ -67,7 +68,7 @@ async def admin_get_cms_page(
 
     items = data.get("items") or []
     if not items:
-        return {"error": f"CMS page '{identifier}' not found."}
+        raise MagentoNotFoundError(f"CMS page '{identifier}' not found.")
     return _parse_page(items[0])
 
 
@@ -145,7 +146,7 @@ async def admin_update_cms_page(
 
     updated_fields = [k for k in page if k != "id"]
     if not updated_fields:
-        return {"error": "No fields to update. Provide at least one field to change."}
+        raise ValueError("No fields to update. Provide at least one field to change.")
 
     async with RESTClient.from_env() as client:
         await client.put(
@@ -167,27 +168,30 @@ def register_cms_tools(mcp: FastMCP) -> None:
 
     mcp.tool(
         name="admin_get_cms_page",
+        title="Get CMS Page",
         description=(
             "Get a CMS page by numeric ID or URL identifier. "
             "Returns full page including HTML content, meta fields, and active status."
         ),
-        annotations={"readOnlyHint": True, "destructiveHint": False, "openWorldHint": True},
+        annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
     )(admin_get_cms_page)
 
     mcp.tool(
         name="admin_search_cms_pages",
+        title="Search CMS Pages",
         description=(
             "Search CMS pages by title, identifier, or active status. "
             "Title and identifier support wildcards (e.g. %about%)."
         ),
-        annotations={"readOnlyHint": True, "destructiveHint": False, "openWorldHint": True},
+        annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
     )(admin_search_cms_pages)
 
     mcp.tool(
         name="admin_update_cms_page",
+        title="Update CMS Page",
         description=(
             "Update a CMS page (title, content, active status, meta fields). "
             "Only specified fields are changed. Requires confirmation."
         ),
-        annotations={"readOnlyHint": False, "destructiveHint": True, "openWorldHint": True},
+        annotations={"readOnlyHint": False, "destructiveHint": True, "idempotentHint": False, "openWorldHint": True},
     )(admin_update_cms_page)

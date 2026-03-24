@@ -24,6 +24,7 @@ def register_get_inventory(mcp: FastMCP) -> None:
 
     @mcp.tool(
         name="admin_get_inventory",
+        title="Get Inventory",
         description=(
             "Check salable quantity and availability for one or more product SKUs. "
             "Uses Magento's inventory salable-quantity endpoints which account for "
@@ -32,6 +33,7 @@ def register_get_inventory(mcp: FastMCP) -> None:
         annotations={
             "readOnlyHint": True,
             "destructiveHint": False,
+            "idempotentHint": True,
             "openWorldHint": True,
         },
     )
