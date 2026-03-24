@@ -382,3 +382,227 @@ class TestToolEndToEnd:
             )
 
         assert route.calls[0].request.headers["store"] == "fr"
+
+
+# ---------------------------------------------------------------------------
+# Tool functions (module-level)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def mock_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MAGENTO_BASE_URL", BASE_URL)
+
+
+from magemcp.tools.customer.cart import (
+    c_create_cart,
+    c_get_cart,
+    c_add_to_cart,
+    c_update_cart_item,
+    c_apply_coupon,
+    c_set_guest_email,
+    c_set_shipping_address,
+    c_set_billing_address,
+    c_set_shipping_method,
+    c_set_payment_method,
+    c_place_order,
+)
+
+
+class TestCartToolFunctions:
+    async def test_c_create_cart(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        respx_mock.post(f"{BASE_URL}/graphql").mock(
+            return_value=httpx.Response(200, json={"data": {
+                "createGuestCart": {"cart": {"id": "NEW123"}}
+            }})
+        )
+        result = await c_create_cart()
+        assert result["cart_id"] == "NEW123"
+
+    async def test_c_get_cart(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        cart = _make_cart(cart_id="abc123", items=[_make_cart_item()])
+        respx_mock.post(f"{BASE_URL}/graphql").mock(
+            return_value=httpx.Response(200, json={"data": {"cart": cart}})
+        )
+        result = await c_get_cart("abc123")
+        assert result["id"] == "abc123"
+        assert len(result["items"]) == 1
+
+    async def test_c_add_to_cart(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        cart = _make_cart(cart_id="abc123", items=[_make_cart_item(sku="WJ12")])
+        respx_mock.post(f"{BASE_URL}/graphql").mock(
+            return_value=httpx.Response(200, json={"data": {
+                "addProductsToCart": {"cart": cart, "user_errors": []}
+            }})
+        )
+        result = await c_add_to_cart("abc123", "WJ12")
+        assert result["id"] == "abc123"
+        assert result["items"][0]["product"]["sku"] == "WJ12"
+
+    async def test_c_add_to_cart_user_error_raises(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        respx_mock.post(f"{BASE_URL}/graphql").mock(
+            return_value=httpx.Response(200, json={"data": {
+                "addProductsToCart": {
+                    "cart": _make_cart(),
+                    "user_errors": [{"code": "PRODUCT_NOT_FOUND", "message": "SKU not found"}],
+                }
+            }})
+        )
+        with pytest.raises(MagentoError, match="SKU not found"):
+            await c_add_to_cart("abc123", "NOPE")
+
+    async def test_c_update_cart_item(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        cart = _make_cart()
+        respx_mock.post(f"{BASE_URL}/graphql").mock(
+            return_value=httpx.Response(200, json={"data": {
+                "updateCartItems": {"cart": cart}
+            }})
+        )
+        result = await c_update_cart_item("abc123", "ITEM_UID", quantity=2)
+        assert result["id"] == "abc123"
+
+    async def test_c_update_cart_item_remove(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        cart = _make_cart()
+        respx_mock.post(f"{BASE_URL}/graphql").mock(
+            return_value=httpx.Response(200, json={"data": {
+                "removeItemFromCart": {"cart": cart}
+            }})
+        )
+        result = await c_update_cart_item("abc123", "ITEM_UID", quantity=0)
+        assert result["id"] == "abc123"
+
+    async def test_c_apply_coupon(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        cart = _make_cart(applied_coupons=[{"code": "SAVE10"}])
+        respx_mock.post(f"{BASE_URL}/graphql").mock(
+            return_value=httpx.Response(200, json={"data": {
+                "applyCouponToCart": {"cart": cart}
+            }})
+        )
+        result = await c_apply_coupon("abc123", "SAVE10")
+        assert result["applied_coupons"][0]["code"] == "SAVE10"
+
+    async def test_c_set_guest_email(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        respx_mock.post(f"{BASE_URL}/graphql").mock(
+            return_value=httpx.Response(200, json={"data": {
+                "setGuestEmailOnCart": {"cart": {"email": "guest@example.com"}}
+            }})
+        )
+        result = await c_set_guest_email("abc123", "guest@example.com")
+        assert result["email"] == "guest@example.com"
+
+    async def test_c_set_shipping_address(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        cart = _make_cart()
+        respx_mock.post(f"{BASE_URL}/graphql").mock(
+            return_value=httpx.Response(200, json={"data": {
+                "setShippingAddressesOnCart": {"cart": cart}
+            }})
+        )
+        result = await c_set_shipping_address(
+            "abc123", "Jane", "Doe", ["1 Main St"], "Portland", "OR", "97201", "US", "555-1234"
+        )
+        assert result["id"] == "abc123"
+
+    async def test_c_set_billing_address(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        cart = _make_cart()
+        respx_mock.post(f"{BASE_URL}/graphql").mock(
+            return_value=httpx.Response(200, json={"data": {
+                "setBillingAddressOnCart": {"cart": cart}
+            }})
+        )
+        result = await c_set_billing_address(
+            "abc123", "Jane", "Doe", ["1 Main St"], "Portland", "OR", "97201", "US", "555-1234"
+        )
+        assert result["id"] == "abc123"
+
+    async def test_c_set_shipping_method(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        cart = _make_cart()
+        respx_mock.post(f"{BASE_URL}/graphql").mock(
+            return_value=httpx.Response(200, json={"data": {
+                "setShippingMethodsOnCart": {"cart": cart}
+            }})
+        )
+        result = await c_set_shipping_method("abc123", "flatrate", "flatrate")
+        assert result["id"] == "abc123"
+
+    async def test_c_set_payment_method(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        cart = _make_cart()
+        respx_mock.post(f"{BASE_URL}/graphql").mock(
+            return_value=httpx.Response(200, json={"data": {
+                "setPaymentMethodOnCart": {"cart": cart}
+            }})
+        )
+        result = await c_set_payment_method("abc123")
+        assert result["id"] == "abc123"
+
+    async def test_c_place_order(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        respx_mock.post(f"{BASE_URL}/graphql").mock(
+            return_value=httpx.Response(200, json={"data": {
+                "placeOrder": {
+                    "order": {"order_number": "000000042"},
+                    "errors": [],
+                }
+            }})
+        )
+        result = await c_place_order("abc123")
+        assert result["order_number"] == "000000042"
+
+    async def test_c_place_order_error_raises(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        respx_mock.post(f"{BASE_URL}/graphql").mock(
+            return_value=httpx.Response(200, json={"data": {
+                "placeOrder": {
+                    "order": None,
+                    "errors": [{"code": "UNABLE_TO_PLACE_ORDER", "message": "Cart is empty"}],
+                }
+            }})
+        )
+        with pytest.raises(MagentoError, match="Cart is empty"):
+            await c_place_order("abc123")
+
+    async def test_parse_cart_helper(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        from magemcp.tools.customer.cart import _parse_cart, _address_variables, SetAddressInput
+        cart = _make_cart(cart_id="test-id")
+        result = _parse_cart(cart)
+        assert result["id"] == "test-id"
+
+    async def test_address_variables_helper(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        from magemcp.tools.customer.cart import _address_variables, SetAddressInput
+        inp = SetAddressInput(
+            cart_id="x", firstname="Jane", lastname="Doe",
+            street=["1 Main St"], city="Portland", region="OR",
+            postcode="97201", country_code="US", telephone="555-0000",
+        )
+        variables = _address_variables(inp)
+        assert variables["firstname"] == "Jane"
+        assert variables["street"] == ["1 Main St"]

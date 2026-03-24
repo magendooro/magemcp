@@ -13,11 +13,13 @@ from magemcp.models.catalog import (
     CGetProductInput,
     CGetProductOutput,
 )
+from magemcp.connectors.errors import MagentoNotFoundError as RestNotFoundError
 from magemcp.tools.customer.get_product import (
     _parse_categories,
     _parse_custom_attributes,
     _parse_media_gallery,
     _parse_product_detail,
+    c_get_product,
 )
 
 BASE_URL = "https://magento.test"
@@ -471,3 +473,48 @@ class TestOutputSerialization:
         assert isinstance(dumped["custom_attributes"], list)
         assert dumped["custom_attributes"][0]["attribute_code"] == "size"
         assert dumped["min_price"]["final_price"]["value"] is not None
+
+
+# ---------------------------------------------------------------------------
+# Tool function (module-level)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def mock_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MAGENTO_BASE_URL", BASE_URL)
+
+
+class TestToolFunction:
+    async def test_returns_product_detail(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        product = _make_gql_product_detail(sku="WJ12")
+        gql_data = {"products": {"items": [product]}}
+        respx_mock.post(f"{BASE_URL}/graphql").mock(
+            return_value=httpx.Response(200, json={"data": gql_data})
+        )
+        result = await c_get_product("WJ12")
+        assert result["sku"] == "WJ12"
+        assert result["name"] == "Stellar Running Jacket"
+
+    async def test_not_found_raises(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        gql_data = {"products": {"items": []}}
+        respx_mock.post(f"{BASE_URL}/graphql").mock(
+            return_value=httpx.Response(200, json={"data": gql_data})
+        )
+        with pytest.raises(RestNotFoundError, match="NOPE"):
+            await c_get_product("NOPE")
+
+    async def test_store_scope_sent_as_header(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        product = _make_gql_product_detail()
+        gql_data = {"products": {"items": [product]}}
+        route = respx_mock.post(f"{BASE_URL}/graphql").mock(
+            return_value=httpx.Response(200, json={"data": gql_data})
+        )
+        await c_get_product("WJ12", store_scope="fr")
+        assert route.calls[0].request.headers.get("store") == "fr"

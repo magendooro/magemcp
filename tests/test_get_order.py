@@ -16,6 +16,7 @@ from magemcp.models.order import (
     mask_phone,
     mask_street,
 )
+from magemcp.connectors.errors import MagentoNotFoundError as RestNotFoundError
 from magemcp.tools.admin.get_order import (
     _extract_shipping_address,
     _extract_shipping_method,
@@ -24,6 +25,7 @@ from magemcp.tools.admin.get_order import (
     _parse_shipments,
     _parse_status_history,
     parse_order,
+    admin_get_order,
 )
 
 BASE_URL = "https://magento.test"
@@ -667,3 +669,46 @@ class TestOutputSerialization:
         assert dumped["billing_address"]["street"] == ["123 Main St", "Apt 4"]
         assert len(dumped["shipments"]) == 1
         assert dumped["shipments"][0]["tracks"][0]["track_number"] == "1Z999"
+
+
+# ---------------------------------------------------------------------------
+# Tool function (module-level)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def mock_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MAGENTO_BASE_URL", BASE_URL)
+    monkeypatch.setenv("MAGEMCP_ADMIN_TOKEN", TOKEN)
+
+
+class TestToolFunction:
+    async def test_get_order_by_increment_id(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        order = _make_rest_order(increment_id="000000042")
+        respx_mock.get(f"{BASE_URL}/rest/default/V1/orders").mock(
+            return_value=httpx.Response(200, json={"items": [order], "total_count": 1})
+        )
+        result = await admin_get_order("000000042")
+        assert result["increment_id"] == "000000042"
+        assert result["pii_mode"] == "full"
+
+    async def test_not_found_raises(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        respx_mock.get(f"{BASE_URL}/rest/default/V1/orders").mock(
+            return_value=httpx.Response(200, json={"items": [], "total_count": 0})
+        )
+        with pytest.raises(RestNotFoundError, match="000000099"):
+            await admin_get_order("000000099")
+
+    async def test_store_scope_in_url(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        order = _make_rest_order()
+        route = respx_mock.get(f"{BASE_URL}/rest/fr/V1/orders").mock(
+            return_value=httpx.Response(200, json={"items": [order], "total_count": 1})
+        )
+        await admin_get_order("000000001", store_scope="fr")
+        assert route.called

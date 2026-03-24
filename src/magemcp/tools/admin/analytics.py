@@ -6,7 +6,7 @@ import logging
 from collections import defaultdict
 from typing import Any, Literal
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 
 from magemcp.connectors.rest_client import RESTClient
 from magemcp.utils.dates import parse_date_expr
@@ -83,20 +83,31 @@ async def _fetch_all_orders(
     to_date: str | None,
     status: str | None,
     store_code: str,
+    ctx: Context | None = None,
 ) -> list[dict[str, Any]]:
     """Paginate through all matching orders and return raw items."""
+    from anyio.lowlevel import checkpoint as anyio_checkpoint
+
     all_items: list[dict[str, Any]] = []
     page = 1
+    total = None
     while True:
+        # Explicit cancellation checkpoint — allows task cancellation between pages
+        await anyio_checkpoint()
         params = _build_date_params(from_date, to_date, status, _PAGE_SIZE, page)
         async with RESTClient.from_env() as client:
             data = await client.get("/V1/orders", params=params, store_code=store_code)
         items = data.get("items") or []
         all_items.extend(items)
-        total = data.get("total_count", 0)
+        if total is None:
+            total = data.get("total_count", 0)
+        if ctx and total:
+            await ctx.report_progress(len(all_items), total)
         if len(all_items) >= total or not items:
             break
         page += 1
+    if ctx:
+        await ctx.debug(f"Fetched {len(all_items)} orders total.")
     return all_items
 
 
@@ -190,6 +201,7 @@ async def admin_get_analytics(
     status_filter: str | None = None,
     group_by: str | None = None,
     store_scope: str = "default",
+    ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Aggregate order analytics from Magento.
 
@@ -210,8 +222,14 @@ async def admin_get_analytics(
         "admin_get_analytics metric=%s from=%s to=%s status=%s group_by=%s store=%s",
         metric, resolved_from, resolved_to, status_filter, group_by, store_scope,
     )
+    if ctx:
+        await ctx.info(
+            f"Fetching orders for metric={metric}"
+            + (f" from={resolved_from}" if resolved_from else "")
+            + (f" to={resolved_to}" if resolved_to else "")
+        )
 
-    orders = await _fetch_all_orders(resolved_from, resolved_to, status_filter, store_scope)
+    orders = await _fetch_all_orders(resolved_from, resolved_to, status_filter, store_scope, ctx=ctx)
 
     result: dict[str, Any] = {
         "from_date": resolved_from,
@@ -242,11 +260,14 @@ def register_analytics(mcp: FastMCP) -> None:
         name="admin_get_analytics",
         title="Get Analytics",
         description=(
-            "Aggregate order analytics from Magento. "
+            "Aggregate order analytics for a date range. Use for questions like 'how much revenue this month?' "
+            "or 'what are the top-selling products this week?'. "
             "metric: order_count | revenue | average_order_value | top_products. "
-            "Supports date range filters (YYYY-MM-DD or natural language: today, this week, last month, ytd). "
-            "Optional group_by: day | week | month | status. "
-            "Optional status_filter to restrict to specific order statuses."
+            "from_date / to_date: YYYY-MM-DD or natural language (today, yesterday, this week, "
+            "last month, this month, ytd, last 7 days, last 30 days). "
+            "group_by: day | week | month | status — breaks down the metric into a time series or by order status. "
+            "status_filter: restrict to a specific order status (e.g. 'complete', 'processing'). "
+            "Note: fetches all matching orders via pagination — avoid very large date ranges without status_filter."
         ),
         annotations={
             "readOnlyHint": True,

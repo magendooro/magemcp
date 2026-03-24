@@ -115,6 +115,45 @@ class TestStoreConfig:
         assert route.calls[0].request.headers["store"] == "fr"
 
     @respx.mock
+    async def test_tool_function_returns_config(self) -> None:
+        """c_get_store_config tool function fetches and returns storeConfig dict."""
+        import os
+        config = _make_store_config(locale="de_DE", base_currency_code="EUR")
+        gql_response = {"data": {"storeConfig": config}}
+        respx.post(f"{BASE_URL}/graphql").mock(
+            return_value=httpx.Response(200, json=gql_response),
+        )
+
+        from magemcp.tools.customer.store_config import _cache, c_get_store_config
+
+        _cache._store.clear()  # ensure no cache hit
+
+        os.environ["MAGENTO_BASE_URL"] = BASE_URL
+
+        result = await c_get_store_config(store_scope="default")
+        assert result["locale"] == "de_DE"
+        assert result["base_currency_code"] == "EUR"
+
+    @respx.mock
+    async def test_tool_function_caches_result(self) -> None:
+        """Second call with same store_scope returns cached result without HTTP request."""
+        import os
+        config = _make_store_config()
+        gql_response = {"data": {"storeConfig": config}}
+        route = respx.post(f"{BASE_URL}/graphql").mock(
+            return_value=httpx.Response(200, json=gql_response),
+        )
+
+        from magemcp.tools.customer.store_config import _cache, c_get_store_config
+
+        _cache._store.clear()
+        os.environ["MAGENTO_BASE_URL"] = BASE_URL
+
+        await c_get_store_config(store_scope="cache_test")
+        await c_get_store_config(store_scope="cache_test")
+        assert route.call_count == 1  # second call used cache
+
+    @respx.mock
     async def test_all_fields_present(self) -> None:
         config = _make_store_config()
         gql_response = {"data": {"storeConfig": config}}

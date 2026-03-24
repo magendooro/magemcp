@@ -55,31 +55,6 @@ class AdminSearchOrdersInput(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def _build_filters(inp: AdminSearchOrdersInput) -> dict[str, Any]:
-    """Build Magento searchCriteria filters from input."""
-    filters: dict[str, Any] = {}
-    if inp.status:
-        filters["status"] = inp.status
-    if inp.customer_email:
-        filters["customer_email"] = inp.customer_email
-    if inp.created_from:
-        filters["created_at"] = (inp.created_from, "gteq")
-    if inp.created_to:
-        # If created_from already set, use a different filter group key
-        if inp.created_from:
-            filters["created_at_to"] = None  # placeholder, handled below
-        else:
-            filters["created_at"] = (inp.created_to, "lteq")
-    if inp.grand_total_min is not None:
-        filters["grand_total"] = (str(inp.grand_total_min), "gteq")
-    if inp.grand_total_max is not None:
-        if inp.grand_total_min is not None:
-            filters["grand_total_max"] = None  # placeholder, handled below
-        else:
-            filters["grand_total"] = (str(inp.grand_total_max), "lteq")
-    return filters
-
-
 def _build_search_params(inp: AdminSearchOrdersInput) -> dict[str, str]:
     """Build complete searchCriteria params including range filters.
 
@@ -162,16 +137,70 @@ def _parse_order_summary(raw: dict[str, Any]) -> OrderSummary:
 # ---------------------------------------------------------------------------
 
 
+async def admin_search_orders(
+    status: str | None = None,
+    customer_email: str | None = None,
+    created_from: str | None = None,
+    created_to: str | None = None,
+    grand_total_min: float | None = None,
+    grand_total_max: float | None = None,
+    page_size: int = 20,
+    current_page: int = 1,
+    sort_field: str = "created_at",
+    sort_direction: str = "DESC",
+    store_scope: str = "default",
+) -> dict[str, Any]:
+    """Search orders — returns summaries."""
+    inp = AdminSearchOrdersInput(
+        status=status,
+        customer_email=customer_email,
+        created_from=parse_date_expr(created_from) if created_from else None,
+        created_to=parse_date_expr(created_to) if created_to else None,
+        grand_total_min=grand_total_min,
+        grand_total_max=grand_total_max,
+        page_size=page_size,
+        current_page=current_page,
+        sort_field=sort_field,
+        sort_direction=sort_direction,
+        store_scope=store_scope,
+    )
+
+    log.info(
+        "admin_search_orders store=%s status=%s email=%s page=%d",
+        inp.store_scope, inp.status, inp.customer_email, inp.current_page,
+    )
+
+    params = _build_search_params(inp)
+
+    async with RESTClient.from_env() as client:
+        data = await client.get(
+            "/V1/orders",
+            params=params,
+            store_code=inp.store_scope,
+        )
+
+    raw_items = data.get("items") or []
+    summaries = [_parse_order_summary(item) for item in raw_items]
+
+    return {
+        "orders": [s.model_dump(mode="json") for s in summaries],
+        "total_count": data.get("total_count", 0),
+        "page_size": inp.page_size,
+        "current_page": inp.current_page,
+    }
+
+
 def register_search_orders(mcp: FastMCP) -> None:
     """Register the admin_search_orders tool on the given MCP server."""
-
-    @mcp.tool(
+    mcp.tool(
         name="admin_search_orders",
         title="Search Orders",
         description=(
-            "Search orders with filters: status, customer email, date range, "
-            "total amount range. Returns order summaries (not full detail). "
-            "Use admin_get_order for complete order data."
+            "Search orders with filters: status, customer email, date range, total range. "
+            "from_date/to_date accept natural language: 'today', 'this week', 'last month', 'ytd', "
+            "or ISO date strings. Returns lightweight summaries — use admin_get_order for full detail "
+            "including items, tracking, and addresses. For a single customer's orders use "
+            "admin_get_customer_orders instead."
         ),
         annotations={
             "readOnlyHint": True,
@@ -179,55 +208,4 @@ def register_search_orders(mcp: FastMCP) -> None:
             "idempotentHint": True,
             "openWorldHint": True,
         },
-    )
-    async def admin_search_orders(
-        status: str | None = None,
-        customer_email: str | None = None,
-        created_from: str | None = None,
-        created_to: str | None = None,
-        grand_total_min: float | None = None,
-        grand_total_max: float | None = None,
-        page_size: int = 20,
-        current_page: int = 1,
-        sort_field: str = "created_at",
-        sort_direction: str = "DESC",
-        store_scope: str = "default",
-    ) -> dict[str, Any]:
-        """Search orders — returns summaries."""
-        inp = AdminSearchOrdersInput(
-            status=status,
-            customer_email=customer_email,
-            created_from=parse_date_expr(created_from) if created_from else None,
-            created_to=parse_date_expr(created_to) if created_to else None,
-            grand_total_min=grand_total_min,
-            grand_total_max=grand_total_max,
-            page_size=page_size,
-            current_page=current_page,
-            sort_field=sort_field,
-            sort_direction=sort_direction,
-            store_scope=store_scope,
-        )
-
-        log.info(
-            "admin_search_orders store=%s status=%s email=%s page=%d",
-            inp.store_scope, inp.status, inp.customer_email, inp.current_page,
-        )
-
-        params = _build_search_params(inp)
-
-        async with RESTClient.from_env() as client:
-            data = await client.get(
-                "/V1/orders",
-                params=params,
-                store_code=inp.store_scope,
-            )
-
-        raw_items = data.get("items") or []
-        summaries = [_parse_order_summary(item) for item in raw_items]
-
-        return {
-            "orders": [s.model_dump(mode="json") for s in summaries],
-            "total_count": data.get("total_count", 0),
-            "page_size": inp.page_size,
-            "current_page": inp.current_page,
-        }
+    )(admin_search_orders)

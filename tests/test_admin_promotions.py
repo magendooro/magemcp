@@ -130,6 +130,15 @@ class TestSearchSalesRules:
         assert result["total_count"] == 15
         assert "rules" in result
 
+    async def test_coupon_type_filter(self, mock_env: None, respx_mock: respx.MockRouter) -> None:
+        respx_mock.get(f"{BASE_URL}/rest/{STORE_CODE}/V1/salesRules/search").mock(
+            return_value=Response(200, json=_wrap_search([_make_rule(coupon_type=3)]))
+        )
+        result = await admin_search_sales_rules(coupon_type=3)
+        url = str(respx_mock.calls.last.request.url)
+        assert "coupon_type" in url
+        assert result["rules"][0]["coupon_type"] == 3
+
 
 # ---------------------------------------------------------------------------
 # admin_get_sales_rule
@@ -156,6 +165,14 @@ class TestGetSalesRule:
         )
         with pytest.raises(MagentoNotFoundError):
             await admin_get_sales_rule(rule_id=9999)
+
+    async def test_empty_response_raises_not_found(self, mock_env: None, respx_mock: respx.MockRouter) -> None:
+        from magemcp.connectors.errors import MagentoNotFoundError
+        respx_mock.get(f"{BASE_URL}/rest/{STORE_CODE}/V1/salesRules/42").mock(
+            return_value=Response(200, json={})
+        )
+        with pytest.raises(MagentoNotFoundError):
+            await admin_get_sales_rule(rule_id=42)
 
 
 # ---------------------------------------------------------------------------
@@ -198,3 +215,19 @@ class TestGenerateCoupons:
         payload = json.loads(respx_mock.calls.last.request.content)
         assert payload["couponSpec"]["qty"] == 1
         assert payload["couponSpec"]["format"] == "alphanum"
+
+    async def test_idempotency_key_stores_and_replays(self, mock_env: None, respx_mock: respx.MockRouter) -> None:
+        respx_mock.post(f"{BASE_URL}/rest/{STORE_CODE}/V1/coupons/generate").mock(
+            return_value=Response(200, json=["IDEM-CODE-1"])
+        )
+        result = await admin_generate_coupons(
+            rule_id=3, confirm=True, idempotency_key="gen-001"
+        )
+        assert result["success"] is True
+        assert result["coupon_codes"] == ["IDEM-CODE-1"]
+
+        # Second call with same key should return replay without hitting API
+        result2 = await admin_generate_coupons(
+            rule_id=3, confirm=True, idempotency_key="gen-001"
+        )
+        assert result2.get("idempotent_replay") is True

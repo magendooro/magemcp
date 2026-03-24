@@ -15,6 +15,7 @@ from magemcp.tools.admin.products import (
     _parse_product_detail,
     _parse_product_summary,
     admin_get_product,
+    admin_get_product_attribute,
     admin_search_products,
     admin_update_product,
 )
@@ -178,6 +179,36 @@ class TestParseProductDetail:
 # ---------------------------------------------------------------------------
 
 
+class TestSearchProductsByName:
+    async def test_name_filter_uses_like(self, mock_env: None, respx_mock: respx.MockRouter) -> None:
+        respx_mock.get(f"{BASE_URL}/rest/{STORE_CODE}/V1/products").mock(
+            return_value=Response(200, json=_wrap_search([_make_product()]))
+        )
+        result = await admin_search_products(name="%Duffle%")
+        url = str(respx_mock.calls.last.request.url)
+        assert "name" in url
+        assert "like" in url
+        assert result["products"][0]["name"] == "Joust Duffle Bag"
+
+    async def test_type_id_filter(self, mock_env: None, respx_mock: respx.MockRouter) -> None:
+        respx_mock.get(f"{BASE_URL}/rest/{STORE_CODE}/V1/products").mock(
+            return_value=Response(200, json=_wrap_search([_make_product(type_id="configurable")]))
+        )
+        result = await admin_search_products(type_id="configurable")
+        url = str(respx_mock.calls.last.request.url)
+        assert "type_id" in url
+        assert result["products"][0]["type_id"] == "configurable"
+
+    async def test_visibility_filter(self, mock_env: None, respx_mock: respx.MockRouter) -> None:
+        respx_mock.get(f"{BASE_URL}/rest/{STORE_CODE}/V1/products").mock(
+            return_value=Response(200, json=_wrap_search([_make_product(visibility=4)]))
+        )
+        result = await admin_search_products(visibility=4)
+        url = str(respx_mock.calls.last.request.url)
+        assert "visibility" in url
+        assert result["products"][0]["visibility"] == 4
+
+
 class TestSearchProductsBySku:
     async def test_sku_filter_uses_like(self, mock_env: None, respx_mock: respx.MockRouter) -> None:
         """SKU filter uses 'like' condition to support wildcards."""
@@ -279,13 +310,21 @@ class TestGetProductFull:
 
     async def test_not_found_returns_error(self, mock_env: None, respx_mock: respx.MockRouter) -> None:
         """Non-existent SKU returns an error dict, not an exception."""
-        from magemcp.connectors.errors import MagentoNotFoundError
         respx_mock.get(f"{BASE_URL}/rest/{STORE_CODE}/V1/products/NO-SUCH-SKU").mock(
             return_value=Response(404, json={"message": "Requested product doesn't exist"})
         )
 
         with pytest.raises(MagentoNotFoundError):
             await admin_get_product(sku="NO-SUCH-SKU")
+
+    async def test_empty_response_raises_not_found(self, mock_env: None, respx_mock: respx.MockRouter) -> None:
+        """API returning 200 with empty body (no 'sku' key) raises MagentoNotFoundError."""
+        respx_mock.get(f"{BASE_URL}/rest/{STORE_CODE}/V1/products/GHOST-SKU").mock(
+            return_value=Response(200, json={})
+        )
+
+        with pytest.raises(MagentoNotFoundError):
+            await admin_get_product(sku="GHOST-SKU")
 
 
 # ---------------------------------------------------------------------------
@@ -371,3 +410,336 @@ class TestUpdateProductMultipleFields:
 
         result = await admin_update_product(sku="24-MB01", price=10.0, confirm=True)
         assert "sku" not in result["updated_fields"]
+
+    async def test_weight_field_in_payload(self, mock_env: None, respx_mock: respx.MockRouter) -> None:
+        """weight is included in the product payload when specified."""
+        respx_mock.put(f"{BASE_URL}/rest/{STORE_CODE}/V1/products/24-MB01").mock(
+            return_value=Response(200, json=_make_product())
+        )
+
+        result = await admin_update_product(sku="24-MB01", weight=2.5, confirm=True)
+        assert result["success"] is True
+        assert "weight" in result["updated_fields"]
+        payload = json.loads(respx_mock.calls.last.request.content)["product"]
+        assert payload["weight"] == 2.5
+
+
+def _make_select_attr(
+    attribute_code: str,
+    options: list[dict[str, str]] | None = None,
+    frontend_input: str = "select",
+) -> dict:
+    """Build a mock attribute definition response for a select-type attribute."""
+    if options is None:
+        options = [
+            {"label": " ", "value": ""},
+            {"label": "Black", "value": "49"},
+            {"label": "Blue", "value": "50"},
+            {"label": "Red", "value": "59"},
+        ]
+    return {
+        "attribute_code": attribute_code,
+        "frontend_input": frontend_input,
+        "default_frontend_label": attribute_code.capitalize(),
+        "options": options,
+    }
+
+
+class TestUpdateProductGenericAttributes:
+    async def test_numeric_id_passes_through_without_lookup(
+        self, mock_env: None, respx_mock: respx.MockRouter
+    ) -> None:
+        """Numeric option IDs are sent as-is — no attribute GET needed."""
+        respx_mock.put(f"{BASE_URL}/rest/{STORE_CODE}/V1/products/24-MB01").mock(
+            return_value=Response(200, json=_make_product(
+                custom_attributes=[{"attribute_code": "color", "value": "59"}]
+            ))
+        )
+
+        result = await admin_update_product(
+            sku="24-MB01", attributes={"color": "59"}, confirm=True,
+        )
+
+        # Only the PUT should have been called — no attribute GET
+        assert len([c for c in respx_mock.calls if c.request.method == "GET"]) == 0
+        payload = json.loads(respx_mock.calls.last.request.content)["product"]
+        ca = {a["attribute_code"]: a["value"] for a in payload["custom_attributes"]}
+        assert ca["color"] == "59"
+
+    async def test_label_resolved_to_option_id(
+        self, mock_env: None, respx_mock: respx.MockRouter
+    ) -> None:
+        """A label like 'Red' is resolved to its option ID via attribute GET."""
+        respx_mock.get(f"{BASE_URL}/rest/{STORE_CODE}/V1/products/attributes/color").mock(
+            return_value=Response(200, json=_make_select_attr("color"))
+        )
+        respx_mock.put(f"{BASE_URL}/rest/{STORE_CODE}/V1/products/24-MB01").mock(
+            return_value=Response(200, json=_make_product(
+                custom_attributes=[{"attribute_code": "color", "value": "59"}]
+            ))
+        )
+
+        result = await admin_update_product(
+            sku="24-MB01", attributes={"color": "Red"}, confirm=True,
+        )
+
+        payload = json.loads(respx_mock.calls.last.request.content)["product"]
+        ca = {a["attribute_code"]: a["value"] for a in payload["custom_attributes"]}
+        assert ca["color"] == "59"   # label → ID
+        assert result["updated_fields"] == ["color"]
+
+    async def test_label_resolution_is_case_insensitive(
+        self, mock_env: None, respx_mock: respx.MockRouter
+    ) -> None:
+        respx_mock.get(f"{BASE_URL}/rest/{STORE_CODE}/V1/products/attributes/color").mock(
+            return_value=Response(200, json=_make_select_attr("color"))
+        )
+        respx_mock.put(f"{BASE_URL}/rest/{STORE_CODE}/V1/products/24-MB01").mock(
+            return_value=Response(200, json=_make_product())
+        )
+
+        await admin_update_product(
+            sku="24-MB01", attributes={"color": "red"}, confirm=True,  # lowercase
+        )
+
+        payload = json.loads(respx_mock.calls.last.request.content)["product"]
+        ca = {a["attribute_code"]: a["value"] for a in payload["custom_attributes"]}
+        assert ca["color"] == "59"
+
+    async def test_multiselect_labels_resolved(
+        self, mock_env: None, respx_mock: respx.MockRouter
+    ) -> None:
+        """Comma-separated labels for a multiselect attribute are each resolved."""
+        respx_mock.get(f"{BASE_URL}/rest/{STORE_CODE}/V1/products/attributes/climate").mock(
+            return_value=Response(200, json=_make_select_attr(
+                "climate",
+                frontend_input="multiselect",
+                options=[
+                    {"label": " ", "value": ""},
+                    {"label": "Indoor", "value": "201"},
+                    {"label": "Outdoor", "value": "202"},
+                    {"label": "All-Season", "value": "203"},
+                ],
+            ))
+        )
+        respx_mock.put(f"{BASE_URL}/rest/{STORE_CODE}/V1/products/24-MB01").mock(
+            return_value=Response(200, json=_make_product())
+        )
+
+        await admin_update_product(
+            sku="24-MB01", attributes={"climate": "Indoor,Outdoor"}, confirm=True,
+        )
+
+        payload = json.loads(respx_mock.calls.last.request.content)["product"]
+        ca = {a["attribute_code"]: a["value"] for a in payload["custom_attributes"]}
+        assert ca["climate"] == "201,202"
+
+    async def test_swatch_visual_label_resolved(
+        self, mock_env: None, respx_mock: respx.MockRouter
+    ) -> None:
+        """swatch_visual attributes also require option ID lookup."""
+        respx_mock.get(f"{BASE_URL}/rest/{STORE_CODE}/V1/products/attributes/color").mock(
+            return_value=Response(200, json=_make_select_attr("color", frontend_input="swatch_visual"))
+        )
+        respx_mock.put(f"{BASE_URL}/rest/{STORE_CODE}/V1/products/24-MB01").mock(
+            return_value=Response(200, json=_make_product())
+        )
+
+        await admin_update_product(
+            sku="24-MB01", attributes={"color": "Black"}, confirm=True,
+        )
+
+        payload = json.loads(respx_mock.calls.last.request.content)["product"]
+        ca = {a["attribute_code"]: a["value"] for a in payload["custom_attributes"]}
+        assert ca["color"] == "49"
+
+    async def test_boolean_yes_normalised(
+        self, mock_env: None, respx_mock: respx.MockRouter
+    ) -> None:
+        """boolean attributes: 'Yes' → '1'."""
+        respx_mock.get(f"{BASE_URL}/rest/{STORE_CODE}/V1/products/attributes/is_featured").mock(
+            return_value=Response(200, json={
+                "attribute_code": "is_featured", "frontend_input": "boolean", "options": []
+            })
+        )
+        respx_mock.put(f"{BASE_URL}/rest/{STORE_CODE}/V1/products/24-MB01").mock(
+            return_value=Response(200, json=_make_product())
+        )
+
+        await admin_update_product(
+            sku="24-MB01", attributes={"is_featured": "Yes"}, confirm=True,
+        )
+
+        payload = json.loads(respx_mock.calls.last.request.content)["product"]
+        ca = {a["attribute_code"]: a["value"] for a in payload["custom_attributes"]}
+        assert ca["is_featured"] == "1"
+
+    async def test_boolean_false_normalised(
+        self, mock_env: None, respx_mock: respx.MockRouter
+    ) -> None:
+        """boolean attributes: False → '0'."""
+        respx_mock.get(f"{BASE_URL}/rest/{STORE_CODE}/V1/products/attributes/is_featured").mock(
+            return_value=Response(200, json={
+                "attribute_code": "is_featured", "frontend_input": "boolean", "options": []
+            })
+        )
+        respx_mock.put(f"{BASE_URL}/rest/{STORE_CODE}/V1/products/24-MB01").mock(
+            return_value=Response(200, json=_make_product())
+        )
+
+        await admin_update_product(
+            sku="24-MB01", attributes={"is_featured": False}, confirm=True,
+        )
+
+        payload = json.loads(respx_mock.calls.last.request.content)["product"]
+        ca = {a["attribute_code"]: a["value"] for a in payload["custom_attributes"]}
+        assert ca["is_featured"] == "0"
+
+    async def test_text_attribute_passes_through_without_lookup(
+        self, mock_env: None, respx_mock: respx.MockRouter
+    ) -> None:
+        """text attributes: non-numeric strings still skip the lookup (pass through)."""
+        # The value "Acme Corp" is not numeric, but manufacturer is a text field.
+        # After fetching the attr def we see frontend_input=text and pass through.
+        respx_mock.get(f"{BASE_URL}/rest/{STORE_CODE}/V1/products/attributes/manufacturer").mock(
+            return_value=Response(200, json={
+                "attribute_code": "manufacturer", "frontend_input": "text", "options": []
+            })
+        )
+        respx_mock.put(f"{BASE_URL}/rest/{STORE_CODE}/V1/products/24-MB01").mock(
+            return_value=Response(200, json=_make_product(
+                custom_attributes=[{"attribute_code": "manufacturer", "value": "Acme Corp"}]
+            ))
+        )
+
+        result = await admin_update_product(
+            sku="24-MB01", attributes={"manufacturer": "Acme Corp"}, confirm=True,
+        )
+
+        payload = json.loads(respx_mock.calls.last.request.content)["product"]
+        ca = {a["attribute_code"]: a["value"] for a in payload["custom_attributes"]}
+        assert ca["manufacturer"] == "Acme Corp"
+        assert result["after"]["manufacturer"] == "Acme Corp"
+
+    async def test_unknown_label_raises_with_available_options(
+        self, mock_env: None, respx_mock: respx.MockRouter
+    ) -> None:
+        """Unknown label raises ValueError listing the available options."""
+        respx_mock.get(f"{BASE_URL}/rest/{STORE_CODE}/V1/products/attributes/color").mock(
+            return_value=Response(200, json=_make_select_attr("color"))
+        )
+
+        with pytest.raises(ValueError, match="No option matching 'Purple'"):
+            await admin_update_product(
+                sku="24-MB01", attributes={"color": "Purple"}, confirm=True,
+            )
+
+    async def test_none_values_in_attributes_skipped(
+        self, mock_env: None, respx_mock: respx.MockRouter
+    ) -> None:
+        """None values in the attributes dict are not included in the payload."""
+        respx_mock.get(f"{BASE_URL}/rest/{STORE_CODE}/V1/products/attributes/color").mock(
+            return_value=Response(200, json=_make_select_attr("color"))
+        )
+        respx_mock.put(f"{BASE_URL}/rest/{STORE_CODE}/V1/products/24-MB01").mock(
+            return_value=Response(200, json=_make_product())
+        )
+
+        await admin_update_product(
+            sku="24-MB01",
+            attributes={"color": "Blue", "material": None},
+            confirm=True,
+        )
+
+        payload = json.loads(respx_mock.calls.last.request.content)["product"]
+        ca = {a["attribute_code"]: a["value"] for a in payload.get("custom_attributes", [])}
+        assert ca.get("color") == "50"   # "Blue" → "50"
+        assert "material" not in ca
+
+
+class TestGetProductAttribute:
+    def _make_attr_response(
+        self,
+        attribute_code: str = "color",
+        frontend_input: str = "select",
+        options: list | None = None,
+    ) -> dict:
+        if options is None:
+            options = [
+                {"label": " ", "value": ""},   # Magento placeholder — should be stripped
+                {"label": "Black", "value": "49"},
+                {"label": "Blue", "value": "50"},
+                {"label": "Red", "value": "59"},
+            ]
+        return {
+            "attribute_id": 93,
+            "attribute_code": attribute_code,
+            "frontend_input": frontend_input,
+            "default_frontend_label": attribute_code.capitalize(),
+            "is_required": False,
+            "is_user_defined": True,
+            "scope": "global",
+            "options": options,
+        }
+
+    async def test_returns_options_for_select_attribute(
+        self, mock_env: None, respx_mock: respx.MockRouter
+    ) -> None:
+        respx_mock.get(f"{BASE_URL}/rest/{STORE_CODE}/V1/products/attributes/color").mock(
+            return_value=Response(200, json=self._make_attr_response())
+        )
+
+        result = await admin_get_product_attribute("color")
+
+        assert result["attribute_code"] == "color"
+        assert result["frontend_input"] == "select"
+        # Magento's empty placeholder option should be stripped
+        assert all(o["value"] not in ("", None) for o in result["options"])
+        labels = [o["label"] for o in result["options"]]
+        assert "Red" in labels
+        assert "Black" in labels
+
+    async def test_empty_placeholder_option_stripped(
+        self, mock_env: None, respx_mock: respx.MockRouter
+    ) -> None:
+        """The blank value='' option Magento always inserts is removed."""
+        respx_mock.get(f"{BASE_URL}/rest/{STORE_CODE}/V1/products/attributes/color").mock(
+            return_value=Response(200, json=self._make_attr_response())
+        )
+
+        result = await admin_get_product_attribute("color")
+        assert len(result["options"]) == 3   # Black, Blue, Red — not the empty one
+
+    async def test_text_attribute_has_empty_options(
+        self, mock_env: None, respx_mock: respx.MockRouter
+    ) -> None:
+        """Text/textarea attributes return no options."""
+        respx_mock.get(
+            f"{BASE_URL}/rest/{STORE_CODE}/V1/products/attributes/description"
+        ).mock(
+            return_value=Response(200, json=self._make_attr_response(
+                attribute_code="description",
+                frontend_input="textarea",
+                options=[],
+            ))
+        )
+
+        result = await admin_get_product_attribute("description")
+        assert result["frontend_input"] == "textarea"
+        assert result["options"] == []
+
+    async def test_not_found_raises(
+        self, mock_env: None, respx_mock: respx.MockRouter
+    ) -> None:
+        respx_mock.get(
+            f"{BASE_URL}/rest/{STORE_CODE}/V1/products/attributes/nonexistent"
+        ).mock(return_value=Response(404, json={"message": "Not found"}))
+
+        from magemcp.connectors.errors import MagentoNotFoundError
+        with pytest.raises(Exception):   # 404 → MagentoError or MagentoNotFoundError
+            await admin_get_product_attribute("nonexistent")
+
+    async def test_registered_on_server(self) -> None:
+        from magemcp.server import mcp
+        names = list(mcp._tool_manager._tools.keys())
+        assert "admin_get_product_attribute" in names

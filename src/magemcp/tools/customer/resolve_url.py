@@ -85,15 +85,33 @@ def _parse_route(route: dict[str, Any] | None) -> dict[str, Any]:
     return result
 
 
+async def c_resolve_url(
+    url: str,
+    store_scope: str = "default",
+) -> dict[str, Any]:
+    """Resolve a URL to a product, category, or CMS page."""
+    inp = CResolveUrlInput(url=url, store_scope=store_scope)
+    log.info("c_resolve_url url=%s store=%s", inp.url, inp.store_scope)
+    async with GraphQLClient.from_env() as client:
+        data = await client.query(
+            RESOLVE_URL_QUERY,
+            variables={"url": inp.url},
+            store_code=inp.store_scope,
+        )
+    return _parse_route(data.get("route"))
+
+
 def register_resolve_url(mcp: FastMCP) -> None:
     """Register the c_resolve_url tool on the given MCP server."""
-
-    @mcp.tool(
+    mcp.tool(
         name="c_resolve_url",
         title="Resolve URL",
         description=(
-            "Resolve a SEO-friendly URL to a product, category, or CMS page. "
-            "Returns the entity type and key identifiers (SKU, category UID, or CMS identifier)."
+            "Resolve a SEO-friendly URL path to the underlying entity (product, category, or CMS page). "
+            "Use when the user shares a URL or url_key and you need to know what it points to. "
+            "Pass the path portion only — e.g. 'blue-jacket.html' or 'women/tops' (no domain). "
+            "Returns type (SimpleProduct/ConfigurableProduct/CategoryTree/CmsPage) "
+            "plus the key identifier: sku for products, uid for categories, identifier for CMS pages."
         ),
         annotations={
             "readOnlyHint": True,
@@ -101,18 +119,4 @@ def register_resolve_url(mcp: FastMCP) -> None:
             "idempotentHint": True,
             "openWorldHint": True,
         },
-    )
-    async def c_resolve_url(
-        url: str,
-        store_scope: str = "default",
-    ) -> dict[str, Any]:
-        """Resolve a URL to a product, category, or CMS page."""
-        inp = CResolveUrlInput(url=url, store_scope=store_scope)
-        log.info("c_resolve_url url=%s store=%s", inp.url, inp.store_scope)
-        async with GraphQLClient.from_env() as client:
-            data = await client.query(
-                RESOLVE_URL_QUERY,
-                variables={"url": inp.url},
-                store_code=inp.store_scope,
-            )
-        return _parse_route(data.get("route"))
+    )(c_resolve_url)

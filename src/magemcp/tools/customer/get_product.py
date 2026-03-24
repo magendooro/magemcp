@@ -178,15 +178,42 @@ def _parse_product_detail(item: dict[str, Any]) -> CGetProductOutput:
 # ---------------------------------------------------------------------------
 
 
+async def c_get_product(
+    sku: str,
+    store_scope: str = "default",
+) -> CGetProductOutput:
+    """Get full product detail by SKU."""
+    inp = CGetProductInput(sku=sku, store_scope=store_scope)
+
+    log.info("c_get_product sku=%s store=%s", inp.sku, inp.store_scope)
+
+    async with GraphQLClient.from_env() as client:
+        data = await client.query(
+            GET_PRODUCT_QUERY,
+            variables={"sku": inp.sku},
+            store_code=inp.store_scope,
+        )
+
+    items = (data.get("products") or {}).get("items") or []
+    if not items:
+        raise MagentoNotFoundError(f"Product with SKU '{inp.sku}' not found.")
+
+    result = _parse_product_detail(items[0])
+    return result.model_dump(mode="json")
+
+
 def register_get_product(mcp: FastMCP) -> None:
     """Register the c_get_product tool on the given MCP server."""
-
-    @mcp.tool(
+    mcp.tool(
         name="c_get_product",
         title="Get Product",
         description=(
-            "Fetch full product detail by SKU. Returns name, description, pricing, "
-            "images, categories, stock status, and custom attributes."
+            "Get complete storefront product detail by SKU. "
+            "Returns name, full HTML-stripped description, pricing (regular + final + discount %), "
+            "all gallery images, category breadcrumbs, stock_status, "
+            "and configurable options (size/color choices with labels) for ConfigurableProduct types. "
+            "Use c_search_products to discover SKUs first. "
+            "For raw warehouse stock quantity use admin_get_product or admin_get_inventory instead."
         ),
         annotations={
             "readOnlyHint": True,
@@ -194,26 +221,4 @@ def register_get_product(mcp: FastMCP) -> None:
             "idempotentHint": True,
             "openWorldHint": True,
         },
-    )
-    async def c_get_product(
-        sku: str,
-        store_scope: str = "default",
-    ) -> dict[str, Any]:
-        """Get full product detail by SKU."""
-        inp = CGetProductInput(sku=sku, store_scope=store_scope)
-
-        log.info("c_get_product sku=%s store=%s", inp.sku, inp.store_scope)
-
-        async with GraphQLClient.from_env() as client:
-            data = await client.query(
-                GET_PRODUCT_QUERY,
-                variables={"sku": inp.sku},
-                store_code=inp.store_scope,
-            )
-
-        items = (data.get("products") or {}).get("items") or []
-        if not items:
-            raise MagentoNotFoundError(f"Product with SKU '{inp.sku}' not found.")
-
-        result = _parse_product_detail(items[0])
-        return result.model_dump(mode="json")
+    )(c_get_product)

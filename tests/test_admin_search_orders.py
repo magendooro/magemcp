@@ -14,6 +14,7 @@ from magemcp.tools.admin.search_orders import (
     AdminSearchOrdersInput,
     _build_search_params,
     _parse_order_summary,
+    admin_search_orders,
 )
 
 BASE_URL = "https://magento.test"
@@ -324,3 +325,73 @@ class TestToolEndToEnd:
         url = str(route.calls[0].request.url)
         assert "pageSize" in url
         assert "currentPage" in url
+
+
+# ---------------------------------------------------------------------------
+# Tool function (module-level)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def mock_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MAGENTO_BASE_URL", BASE_URL)
+    monkeypatch.setenv("MAGEMCP_ADMIN_TOKEN", TOKEN)
+
+
+class TestToolFunction:
+    async def test_returns_summaries(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        orders = [_make_rest_order(increment_id="100000001", grand_total=99.0)]
+        respx_mock.get(f"{BASE_URL}/rest/default/V1/orders").mock(
+            return_value=httpx.Response(200, json=_wrap_rest_response(orders, total_count=1))
+        )
+        result = await admin_search_orders()
+        assert len(result["orders"]) == 1
+        assert result["orders"][0]["increment_id"] == "100000001"
+        assert result["total_count"] == 1
+
+    async def test_empty_results(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        respx_mock.get(f"{BASE_URL}/rest/default/V1/orders").mock(
+            return_value=httpx.Response(200, json=_wrap_rest_response([], total_count=0))
+        )
+        result = await admin_search_orders(status="complete")
+        assert result["orders"] == []
+        assert result["total_count"] == 0
+
+    async def test_pagination_reflected_in_response(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        respx_mock.get(f"{BASE_URL}/rest/default/V1/orders").mock(
+            return_value=httpx.Response(200, json=_wrap_rest_response([], total_count=100))
+        )
+        result = await admin_search_orders(page_size=5, current_page=3)
+        assert result["page_size"] == 5
+        assert result["current_page"] == 3
+
+    async def test_store_scope_in_url(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        route = respx_mock.get(f"{BASE_URL}/rest/fr/V1/orders").mock(
+            return_value=httpx.Response(200, json=_wrap_rest_response([], total_count=0))
+        )
+        await admin_search_orders(store_scope="fr")
+        assert route.called
+
+    async def test_multiple_orders_parsed(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        orders = [
+            _make_rest_order(increment_id="100000001", customer_email="a@example.com"),
+            _make_rest_order(increment_id="100000002", customer_email="b@example.com"),
+            _make_rest_order(increment_id="100000003", customer_email="c@example.com"),
+        ]
+        respx_mock.get(f"{BASE_URL}/rest/default/V1/orders").mock(
+            return_value=httpx.Response(200, json=_wrap_rest_response(orders, total_count=3))
+        )
+        result = await admin_search_orders()
+        assert len(result["orders"]) == 3
+        emails = [o["customer_email"] for o in result["orders"]]
+        assert "a@example.com" in emails

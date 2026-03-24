@@ -17,6 +17,7 @@ from magemcp.policy.engine import (
     READ_TOOLS,
     WRITE_TOOLS,
     _engine,
+    _is_tool_allowed,
     classify_tool,
     with_policy,
 )
@@ -240,3 +241,113 @@ class TestWithPolicy:
         entry = json.loads(audit_records[0].message)
         assert entry["tool"] == "test_tool_error"
         assert "something went wrong" in entry.get("error", "")
+
+
+# ---------------------------------------------------------------------------
+# Tool allowlist (MAGEMCP_ALLOWED_TOOLS)
+# ---------------------------------------------------------------------------
+
+
+class TestToolAllowlist:
+    def test_all_allowed_when_env_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MAGEMCP_ALLOWED_TOOLS", raising=False)
+        assert _is_tool_allowed("admin_cancel_order") is True
+        assert _is_tool_allowed("c_search_products") is True
+
+    def test_all_allowed_when_env_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MAGEMCP_ALLOWED_TOOLS", "")
+        assert _is_tool_allowed("admin_get_order") is True
+
+    def test_allowed_tool_passes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MAGEMCP_ALLOWED_TOOLS", "admin_get_order,c_search_products")
+        assert _is_tool_allowed("admin_get_order") is True
+        assert _is_tool_allowed("c_search_products") is True
+
+    def test_blocked_tool_denied(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MAGEMCP_ALLOWED_TOOLS", "admin_get_order")
+        assert _is_tool_allowed("admin_cancel_order") is False
+
+    def test_whitespace_in_list_ignored(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MAGEMCP_ALLOWED_TOOLS", " admin_get_order , c_search_products ")
+        assert _is_tool_allowed("admin_get_order") is True
+        assert _is_tool_allowed("c_search_products") is True
+
+    async def test_blocked_tool_raises_in_with_policy(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("MAGEMCP_ALLOWED_TOOLS", "admin_get_order")
+
+        async def my_tool() -> dict:
+            return {"ok": True}
+
+        wrapped = with_policy("admin_cancel_order")(my_tool)
+        with pytest.raises(ValueError, match="MAGEMCP_ALLOWED_TOOLS"):
+            await wrapped()
+
+
+# ---------------------------------------------------------------------------
+# Metrics
+# ---------------------------------------------------------------------------
+
+
+class TestMetrics:
+    async def test_call_count_increments(self) -> None:
+        from magemcp.policy.engine import _metrics, get_metrics, with_policy
+        tool_name = "_test_metrics_calls_xyz"
+        _metrics.pop(tool_name, None)
+
+        async def my_tool() -> dict:
+            return {"ok": True}
+
+        wrapped = with_policy(tool_name)(my_tool)
+        await wrapped()
+        await wrapped()
+
+        snap = get_metrics()
+        assert snap[tool_name]["calls"] == 2
+
+    async def test_error_count_increments(self) -> None:
+        from magemcp.policy.engine import _metrics, get_metrics, with_policy
+        tool_name = "_test_metrics_errors_xyz"
+        _metrics.pop(tool_name, None)
+
+        async def bad_tool() -> dict:
+            raise RuntimeError("oops")
+
+        wrapped = with_policy(tool_name)(bad_tool)
+        with pytest.raises(RuntimeError):
+            await wrapped()
+
+        snap = get_metrics()
+        assert snap[tool_name]["errors"] == 1
+
+    async def test_rate_limit_hit_counted(self) -> None:
+        from magemcp.policy.engine import _engine, _metrics, get_metrics, with_policy
+        tool_name = "_test_metrics_rl_xyz"
+        _metrics.pop(tool_name, None)
+        limit = int(os.getenv("MAGEMCP_RATE_LIMIT", "60"))
+        _engine._rate_counters[tool_name] = [time.time()] * limit
+
+        async def my_tool() -> dict:
+            return {"ok": True}
+
+        wrapped = with_policy(tool_name)(my_tool)
+        with pytest.raises(Exception):
+            await wrapped()
+
+        snap = get_metrics()
+        assert snap[tool_name]["rate_limit_hits"] == 1
+
+    def test_get_metrics_returns_all_registered(self) -> None:
+        from magemcp.policy.engine import get_metrics, with_policy
+        tool_name = "_test_metrics_list_xyz"
+
+        async def my_tool() -> dict:
+            return {}
+
+        with_policy(tool_name)(my_tool)
+        snap = get_metrics()
+        assert tool_name in snap
+        assert "calls" in snap[tool_name]
+        assert "errors" in snap[tool_name]
+        assert "avg_duration_ms" in snap[tool_name]

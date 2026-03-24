@@ -10,7 +10,7 @@ import respx
 
 from magemcp.connectors.errors import MagentoError, MagentoNotFoundError
 from magemcp.connectors.graphql_client import GraphQLClient
-from magemcp.tools.customer.resolve_url import CResolveUrlInput, _parse_route
+from magemcp.tools.customer.resolve_url import CResolveUrlInput, _parse_route, c_resolve_url
 
 BASE_URL = "https://magento.test"
 
@@ -208,3 +208,36 @@ class TestToolEndToEnd:
             )
 
         assert route.calls[0].request.headers["store"] == "fr"
+
+
+# ---------------------------------------------------------------------------
+# Tool function (module-level)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def mock_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MAGENTO_BASE_URL", BASE_URL)
+
+
+class TestToolFunction:
+    async def test_resolves_product_url(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        route_data = {"__typename": "SimpleProduct", "sku": "WJ12"}
+        respx_mock.post(f"{BASE_URL}/graphql").mock(
+            return_value=httpx.Response(200, json={"data": {"route": route_data}})
+        )
+        result = await c_resolve_url("stellar-running-jacket.html")
+        assert result["type"] == "SimpleProduct"
+        assert result["sku"] == "WJ12"
+
+    async def test_store_scope_sent_as_header(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        route_data = {"__typename": "CmsPage", "identifier": "about-us"}
+        route = respx_mock.post(f"{BASE_URL}/graphql").mock(
+            return_value=httpx.Response(200, json={"data": {"route": route_data}})
+        )
+        await c_resolve_url("about-us", store_scope="fr")
+        assert route.calls[0].request.headers.get("store") == "fr"

@@ -151,6 +151,16 @@ class TestSearchCmsPages:
         assert result["page_size"] == 10
         assert "pages" in result
 
+    async def test_identifier_filter_uses_like(self, mock_env: None, respx_mock: respx.MockRouter) -> None:
+        respx_mock.get(f"{BASE_URL}/rest/{STORE_CODE}/V1/cmsPage/search").mock(
+            return_value=Response(200, json=_wrap_search([_make_page(identifier="privacy-policy")]))
+        )
+        result = await admin_search_cms_pages(identifier="%privacy%")
+        url = str(respx_mock.calls.last.request.url)
+        assert "identifier" in url
+        assert "like" in url
+        assert result["pages"][0]["identifier"] == "privacy-policy"
+
 
 # ---------------------------------------------------------------------------
 # admin_update_cms_page
@@ -197,3 +207,21 @@ class TestUpdateCmsPage:
         payload = json.loads(respx_mock.calls.last.request.content)
         assert "page" in payload
         assert payload["page"]["id"] == 1
+
+    async def test_optional_meta_fields(self, mock_env: None, respx_mock: respx.MockRouter) -> None:
+        respx_mock.put(f"{BASE_URL}/rest/{STORE_CODE}/V1/cmsPage/1").mock(
+            return_value=Response(200, json=_make_page())
+        )
+        result = await admin_update_cms_page(
+            page_id=1,
+            content_heading="My Heading",
+            meta_title="SEO Title",
+            meta_description="SEO Desc",
+            confirm=True,
+        )
+        assert result["success"] is True
+        assert set(result["updated_fields"]) == {"content_heading", "meta_title", "meta_description"}
+        payload = json.loads(respx_mock.calls.last.request.content)["page"]
+        assert payload["content_heading"] == "My Heading"
+        assert payload["meta_title"] == "SEO Title"
+        assert payload["meta_description"] == "SEO Desc"

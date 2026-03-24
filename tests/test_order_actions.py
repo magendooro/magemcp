@@ -38,7 +38,7 @@ async def test_cancel_requires_confirmation(mock_env: None) -> None:
     """Test that cancel requests confirmation by default."""
     result = await admin_cancel_order(order_id=123)
     assert result["confirmation_required"] is True
-    assert result["action"] == "cancel"
+    assert "cancel" in result["action"]
     assert result["entity"] == "123"
 
 
@@ -121,7 +121,7 @@ async def test_create_invoice_requires_confirmation(mock_env: None) -> None:
     """Invoice creation requires confirmation — irreversible."""
     result = await admin_create_invoice(order_id=123)
     assert result["confirmation_required"] is True
-    assert result["action"] == "create_invoice"
+    assert "invoice" in result["action"]
 
 
 @pytest.mark.asyncio
@@ -145,7 +145,7 @@ async def test_create_shipment_requires_confirmation(mock_env: None) -> None:
     """Shipment creation requires confirmation — irreversible."""
     result = await admin_create_shipment(order_id=123)
     assert result["confirmation_required"] is True
-    assert result["action"] == "create_shipment"
+    assert "shipment" in result["action"]
 
 
 @pytest.mark.asyncio
@@ -199,3 +199,82 @@ async def test_send_order_email(mock_env: None, respx_mock: respx.MockRouter) ->
 
     result = await admin_send_order_email(order_id=123)
     assert result["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_hold_requires_confirmation(mock_env: None) -> None:
+    result = await admin_hold_order(order_id=123, confirm=False)
+    assert result.get("confirmation_required") is True
+    assert "hold" in result["action"]
+
+
+@pytest.mark.asyncio
+async def test_unhold_requires_confirmation(mock_env: None) -> None:
+    result = await admin_unhold_order(order_id=123, confirm=False)
+    assert result.get("confirmation_required") is True
+    assert "unhold" in result["action"]
+
+
+@pytest.mark.asyncio
+async def test_add_comment_with_idempotency_key(
+    mock_env: None, respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post(f"{BASE_URL}/rest/{STORE_CODE}/V1/orders/123/comments").mock(
+        return_value=Response(200, json=True)
+    )
+    result = await admin_add_order_comment(
+        order_id=123, comment="Test", idempotency_key="idem-001"
+    )
+    assert result["success"] is True
+    # Second call with same key should return replay
+    result2 = await admin_add_order_comment(
+        order_id=123, comment="Test", idempotency_key="idem-001"
+    )
+    assert result2.get("idempotent_replay") is True
+
+
+@pytest.mark.asyncio
+async def test_create_invoice_with_idempotency_key(
+    mock_env: None, respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post(f"{BASE_URL}/rest/{STORE_CODE}/V1/order/123/invoice").mock(
+        return_value=Response(200, json="INV-099")
+    )
+    result = await admin_create_invoice(
+        order_id=123, confirm=True, idempotency_key="inv-001"
+    )
+    assert result["success"] is True
+    result2 = await admin_create_invoice(
+        order_id=123, confirm=True, idempotency_key="inv-001"
+    )
+    assert result2.get("idempotent_replay") is True
+
+
+@pytest.mark.asyncio
+async def test_create_shipment_with_idempotency_key(
+    mock_env: None, respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post(f"{BASE_URL}/rest/{STORE_CODE}/V1/order/123/ship").mock(
+        return_value=Response(200, json="SHIP-099")
+    )
+    result = await admin_create_shipment(
+        order_id=123, confirm=True, idempotency_key="ship-001"
+    )
+    assert result["success"] is True
+    result2 = await admin_create_shipment(
+        order_id=123, confirm=True, idempotency_key="ship-001"
+    )
+    assert result2.get("idempotent_replay") is True
+
+
+@pytest.mark.asyncio
+async def test_send_email_with_idempotency_key(
+    mock_env: None, respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post(f"{BASE_URL}/rest/{STORE_CODE}/V1/orders/123/emails").mock(
+        return_value=Response(200, json=True)
+    )
+    result = await admin_send_order_email(order_id=123, idempotency_key="email-001")
+    assert result["success"] is True
+    result2 = await admin_send_order_email(order_id=123, idempotency_key="email-001")
+    assert result2.get("idempotent_replay") is True

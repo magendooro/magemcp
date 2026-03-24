@@ -9,8 +9,9 @@ import pytest
 import respx
 
 from magemcp.connectors.magento import MagentoClient, MagentoNotFoundError
+from magemcp.connectors.errors import MagentoNotFoundError as RestNotFoundError
 from magemcp.models.customer import CGetCustomerInput, CGetCustomerOutput
-from magemcp.tools.admin.get_customer import parse_customer
+from magemcp.tools.admin.get_customer import parse_customer, _parse_address, admin_get_customer
 
 BASE_URL = "https://magento.test"
 TOKEN = "test-token-123"
@@ -287,3 +288,140 @@ class TestOutputSerialization:
         assert dumped["dob"] == "1990-05-15"
         assert dumped["group_id"] == 1
         assert dumped["created_at"] == "2025-01-10 08:00:00"
+
+
+# ---------------------------------------------------------------------------
+# _parse_address
+# ---------------------------------------------------------------------------
+
+
+class TestParseAddress:
+    def test_full_address(self) -> None:
+        raw = {
+            "id": 10,
+            "firstname": "Jane",
+            "lastname": "Doe",
+            "street": ["123 Main St", "Apt 4"],
+            "city": "Springfield",
+            "region": {"region": "Illinois", "region_code": "IL"},
+            "postcode": "62701",
+            "country_id": "US",
+            "telephone": "555-1234",
+            "default_billing": True,
+            "default_shipping": False,
+        }
+        addr = _parse_address(raw)
+        assert addr.id == 10
+        assert addr.firstname == "Jane"
+        assert addr.street == ["123 Main St", "Apt 4"]
+        assert addr.city == "Springfield"
+        assert addr.region == "Illinois"
+        assert addr.region_code == "IL"
+        assert addr.postcode == "62701"
+        assert addr.country_id == "US"
+        assert addr.telephone == "555-1234"
+        assert addr.default_billing is True
+        assert addr.default_shipping is False
+
+    def test_region_as_string(self) -> None:
+        raw = {
+            "id": 11,
+            "firstname": "John",
+            "lastname": "Smith",
+            "street": ["1 Oak Ave"],
+            "city": "Portland",
+            "region": "Oregon",
+            "postcode": "97201",
+            "country_id": "US",
+            "telephone": None,
+            "default_billing": False,
+            "default_shipping": True,
+        }
+        addr = _parse_address(raw)
+        assert addr.region == "Oregon"
+        assert addr.region_code is None
+
+    def test_minimal_address(self) -> None:
+        raw = {"id": 1}
+        addr = _parse_address(raw)
+        assert addr.id == 1
+        assert addr.street == []
+        assert addr.default_billing is False
+        assert addr.default_shipping is False
+
+
+# ---------------------------------------------------------------------------
+# Tool function (module-level)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def mock_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MAGENTO_BASE_URL", BASE_URL)
+    monkeypatch.setenv("MAGEMCP_ADMIN_TOKEN", TOKEN)
+
+
+class TestToolFunction:
+    async def test_get_by_id(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        customer = _make_rest_customer()
+        respx_mock.get(f"{BASE_URL}/rest/default/V1/customers/42").mock(
+            return_value=httpx.Response(200, json=customer)
+        )
+        result = await admin_get_customer(customer_id=42)
+        assert result["customer_id"] == 42
+        assert result["email"] == "jane.doe@example.com"
+
+    async def test_get_by_email(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        customer = _make_rest_customer()
+        respx_mock.get(f"{BASE_URL}/rest/default/V1/customers/search").mock(
+            return_value=httpx.Response(200, json=_wrap_search_response([customer]))
+        )
+        result = await admin_get_customer(email="jane.doe@example.com")
+        assert result["customer_id"] == 42
+
+    async def test_not_found_by_email(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        respx_mock.get(f"{BASE_URL}/rest/default/V1/customers/search").mock(
+            return_value=httpx.Response(200, json=_wrap_search_response([]))
+        )
+        with pytest.raises(RestNotFoundError):
+            await admin_get_customer(email="nobody@example.com")
+
+    async def test_store_scope_in_url(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        customer = _make_rest_customer()
+        route = respx_mock.get(f"{BASE_URL}/rest/fr/V1/customers/42").mock(
+            return_value=httpx.Response(200, json=customer)
+        )
+        await admin_get_customer(customer_id=42, store_scope="fr")
+        assert route.called
+
+    async def test_addresses_parsed(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        customer = _make_rest_customer()
+        customer["addresses"] = [{
+            "id": 10,
+            "firstname": "Jane",
+            "lastname": "Doe",
+            "street": ["1 Main St"],
+            "city": "Portland",
+            "region": {"region": "Oregon", "region_code": "OR"},
+            "postcode": "97201",
+            "country_id": "US",
+            "telephone": "555-9999",
+            "default_billing": True,
+            "default_shipping": True,
+        }]
+        respx_mock.get(f"{BASE_URL}/rest/default/V1/customers/42").mock(
+            return_value=httpx.Response(200, json=customer)
+        )
+        result = await admin_get_customer(customer_id=42)
+        assert len(result["addresses"]) == 1
+        assert result["addresses"][0]["city"] == "Portland"

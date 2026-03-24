@@ -19,6 +19,7 @@ from magemcp.tools.customer.get_categories import (
     _build_variables,
     _parse_category_node,
     _parse_response,
+    c_get_categories,
 )
 
 BASE_URL = "https://magento.test"
@@ -428,3 +429,62 @@ class TestOutputSerialization:
         assert dumped["categories"][0]["children"][0]["name"] == "Tops"
         assert dumped["total_count"] == 1
         assert dumped["page_info"]["current_page"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Tool function (module-level)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def mock_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MAGENTO_BASE_URL", BASE_URL)
+
+
+class TestToolFunction:
+    async def test_returns_categories(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        gql_data = _make_gql_response(items=[_make_category(uid="1", name="Men")])
+        respx_mock.post(f"{BASE_URL}/graphql").mock(
+            return_value=httpx.Response(200, json={"data": gql_data})
+        )
+        # Use unique store_scope to avoid cache collision with other tests
+        result = await c_get_categories(store_scope="tf_returns")
+        assert isinstance(result["categories"], list)
+        assert result["categories"][0]["name"] == "Men"
+
+    async def test_store_scope_sent_as_header(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        gql_data = _make_gql_response()
+        route = respx_mock.post(f"{BASE_URL}/graphql").mock(
+            return_value=httpx.Response(200, json={"data": gql_data})
+        )
+        await c_get_categories(store_scope="tf_scope_fr")
+        assert route.calls[0].request.headers.get("store") == "tf_scope_fr"
+
+    async def test_result_is_cached(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        gql_data = _make_gql_response()
+        route = respx_mock.post(f"{BASE_URL}/graphql").mock(
+            return_value=httpx.Response(200, json={"data": gql_data})
+        )
+        # Use unique store_scope to get a fresh cache entry
+        await c_get_categories(store_scope="tf_cached")
+        await c_get_categories(store_scope="tf_cached")
+        # Second call should hit cache — only one HTTP request
+        assert route.call_count == 1
+
+    async def test_parent_id_filter_in_variables(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        import json
+        gql_data = _make_gql_response()
+        route = respx_mock.post(f"{BASE_URL}/graphql").mock(
+            return_value=httpx.Response(200, json={"data": gql_data})
+        )
+        await c_get_categories(parent_id="42", store_scope="tf_parent")
+        body = json.loads(route.calls[0].request.content)
+        assert body["variables"]["filters"]["parent_id"]["eq"] == "42"

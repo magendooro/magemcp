@@ -41,11 +41,11 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _MAGENTO_URL = os.environ.get("MAGENTO_BASE_URL", "")
-_MAGENTO_TOKEN = os.environ.get("MAGENTO_TOKEN", "")
+_MAGENTO_TOKEN = os.environ.get("MAGEMCP_ADMIN_TOKEN", "") or os.environ.get("MAGENTO_TOKEN", "")
 
 pytestmark = pytest.mark.skipif(
     not (_MAGENTO_URL and _MAGENTO_TOKEN),
-    reason="MAGENTO_BASE_URL and MAGENTO_TOKEN env vars required for integration tests",
+    reason="MAGENTO_BASE_URL and MAGEMCP_ADMIN_TOKEN env vars required for integration tests",
 )
 
 
@@ -707,6 +707,9 @@ class TestStoreConfig:
 
     async def test_tool_store_config(self) -> None:
         """c_get_store_config tool returns config from real Magento."""
+        from magemcp.tools.customer.store_config import _cache as sc_cache
+        sc_cache.clear()  # avoid stale unit-test cache entries
+
         from magemcp.server import mcp as server
 
         tools = server._tool_manager._tools
@@ -1561,3 +1564,587 @@ class TestPromotionTools:
         assert "rules" in result
         for rule in result["rules"]:
             assert rule["is_active"] is True
+
+
+# ---------------------------------------------------------------------------
+# Mirasvit use-case scenarios
+# ---------------------------------------------------------------------------
+# These tests mirror the use cases described at
+# https://mirasvit.com/magento-2-mcp-ai-integration.html and verify that our
+# tool layer can satisfy each one against the real Magento instance.
+
+
+class TestQuickLookups:
+    """UC: Quick Lookups — stock levels, order detail, daily metrics.
+
+    Matches Mirasvit examples:
+      - Check stock levels across warehouses
+      - View order details with line items
+      - Monitor daily revenue and order counts
+    """
+
+    async def test_stock_levels_by_sku(self) -> None:
+        """Check stock level for a discovered SKU via admin_get_inventory."""
+        from magemcp.tools.admin.products import admin_search_products
+        from magemcp.tools.admin.get_inventory import admin_get_inventory
+
+        product_result = await admin_search_products(page_size=1, status=1)
+        if not product_result["products"]:
+            pytest.skip("No products in catalog")
+
+        sku = product_result["products"][0]["sku"]
+        try:
+            result = await admin_get_inventory(skus=[sku])
+        except MagentoError:
+            pytest.skip("MSI inventory endpoints not available")
+
+        assert "items" in result
+        item = result["items"][0]
+        assert item["sku"] == sku
+        assert "salable_quantity" in item
+        assert "is_salable" in item
+        log.info(
+            "Stock check: %s  qty=%.1f  is_salable=%s",
+            sku, item["salable_quantity"], item["is_salable"],
+        )
+
+    async def test_order_details_with_line_items(self) -> None:
+        """View order details including every line-item SKU, name, qty, and price."""
+        from magemcp.tools.admin.get_order import admin_get_order
+
+        async with MagentoClient.from_config() as client:
+            increment_id = await _discover_order_increment_id(client)
+        if increment_id is None:
+            pytest.skip("No orders in the system")
+
+        result = await admin_get_order(increment_id=increment_id)
+
+        assert result["increment_id"] == increment_id
+        assert isinstance(result["items"], list)
+        assert "grand_total" in result
+        assert "status" in result
+
+        if result["items"]:
+            item = result["items"][0]
+            assert "sku" in item
+            assert "name" in item
+            assert "qty_ordered" in item
+            assert "price" in item
+            log.info(
+                "Order %s: %d item(s), grand_total=%.2f, first=%s x%.1f @ %.2f",
+                increment_id,
+                len(result["items"]),
+                result["grand_total"],
+                item["sku"],
+                item["qty_ordered"],
+                item["price"],
+            )
+
+    async def test_daily_revenue_metric(self) -> None:
+        """Monitor revenue — returns a total value and currency."""
+        from magemcp.tools.admin.analytics import admin_get_analytics
+
+        result = await admin_get_analytics(metric="revenue", from_date="this month")
+
+        assert result["metric"] == "revenue"
+        assert "value" in result
+        assert "order_count_fetched" in result
+        assert isinstance(result["value"], float)
+        log.info(
+            "Revenue this month: %.2f %s  (%d orders fetched)",
+            result["value"], result.get("currency"), result["order_count_fetched"],
+        )
+
+    async def test_daily_order_count(self) -> None:
+        """Monitor order counts — returns a total value."""
+        from magemcp.tools.admin.analytics import admin_get_analytics
+
+        result = await admin_get_analytics(metric="order_count", from_date="this month")
+
+        assert result["metric"] == "order_count"
+        assert "value" in result
+        assert isinstance(result["value"], int)
+        log.info("Order count this month: %d", result["value"])
+
+
+class TestSearchAndFilter:
+    """UC: Search & Filter — pending orders, incomplete products, inactive customers.
+
+    Matches Mirasvit examples:
+      - Identify orders over $500 pending shipment
+      - Find products missing images or descriptions
+      - Locate inactive customers from specific regions
+    """
+
+    async def test_orders_pending_shipment(self) -> None:
+        """Find orders in 'pending' status — candidates awaiting shipment."""
+        from magemcp.tools.admin.search_orders import admin_search_orders
+
+        result = await admin_search_orders(status="pending", page_size=10)
+
+        assert "orders" in result
+        assert "total_count" in result
+        # All returned orders must be pending
+        for order in result["orders"]:
+            assert order["status"] == "pending"
+        log.info("Pending orders: %d total", result["total_count"])
+
+    async def test_high_value_orders_pending_shipment(self) -> None:
+        """Find high-value orders (grand_total > 100) in pending/processing status."""
+        from magemcp.tools.admin.search_orders import admin_search_orders
+
+        result = await admin_search_orders(
+            status="processing",
+            grand_total_min=100.0,
+            page_size=10,
+        )
+
+        assert "orders" in result
+        for order in result["orders"]:
+            assert order["status"] == "processing"
+            assert order["grand_total"] >= 100.0
+        log.info(
+            "High-value processing orders (>=100): %d total",
+            result["total_count"],
+        )
+
+    async def test_products_missing_descriptions(self) -> None:
+        """Find products with missing or empty descriptions via admin catalog search."""
+        from magemcp.tools.admin.products import admin_search_products, admin_get_product
+
+        # Fetch a page of products and check their descriptions
+        result = await admin_search_products(page_size=20, status=1)
+
+        if not result["products"]:
+            pytest.skip("No products in catalog")
+
+        skus_without_desc: list[str] = []
+        skus_checked = 0
+        for p in result["products"][:5]:  # check first 5 to keep test fast
+            detail = await admin_get_product(sku=p["sku"])
+            skus_checked += 1
+            desc = detail.get("custom_attributes", {}).get("description", "")
+            if not desc:
+                skus_without_desc.append(p["sku"])
+
+        log.info(
+            "Products checked: %d  |  missing description: %d  |  skus=%s",
+            skus_checked,
+            len(skus_without_desc),
+            skus_without_desc[:3],
+        )
+        # The test passes regardless — the point is that we can enumerate the gap
+        assert skus_checked > 0
+
+    async def test_search_customers_by_region(self) -> None:
+        """Find customers and inspect their region (address-level) data."""
+        from magemcp.tools.admin.search_customers import admin_search_customers
+        from magemcp.tools.admin.get_customer import admin_get_customer
+
+        customers_result = await admin_search_customers(page_size=5)
+        if not customers_result["customers"]:
+            pytest.skip("No customers in the system")
+
+        # Enrich one customer with address data to demonstrate region lookup
+        customer_summary = customers_result["customers"][0]
+        customer_id = customer_summary["customer_id"]
+
+        detail = await admin_get_customer(customer_id=customer_id)
+        addresses = detail.get("addresses", [])
+
+        log.info(
+            "Customer %d (%s): %d addresses",
+            customer_id,
+            customer_summary.get("firstname"),
+            len(addresses),
+        )
+        if addresses:
+            addr = addresses[0]
+            log.info(
+                "  region=%s  city=%s  country=%s",
+                addr.get("region", {}).get("region") if isinstance(addr.get("region"), dict) else addr.get("region"),
+                addr.get("city"),
+                addr.get("country_id"),
+            )
+        # Test passes if we can reach address-level data — even empty is valid
+        assert isinstance(addresses, list)
+
+
+class TestAnalysisAndReports:
+    """UC: Analysis & Reports — revenue trends, top products, customer value.
+
+    Matches Mirasvit examples:
+      - Compare weekly revenue with percentage changes
+      - Rank top 10 products by revenue and quantity
+      - Identify high-value customers inactive for 90+ days
+    """
+
+    async def test_weekly_revenue_breakdown(self) -> None:
+        """Compare revenue week-over-week via group_by=week."""
+        from magemcp.tools.admin.analytics import admin_get_analytics
+
+        result = await admin_get_analytics(
+            metric="revenue",
+            group_by="week",
+            from_date="this year",
+        )
+
+        assert result["metric"] == "revenue"
+        assert "breakdown" in result
+        # Each key should be a week label like "2025-W03"
+        for week_key in result["breakdown"]:
+            assert "-W" in week_key, f"Unexpected week key: {week_key}"
+        log.info(
+            "Weekly revenue breakdown: %d weeks, keys=%s",
+            len(result["breakdown"]),
+            list(result["breakdown"].keys())[:3],
+        )
+
+    async def test_top_products_by_revenue_and_quantity(self) -> None:
+        """Rank top 10 products by revenue and quantity sold."""
+        from magemcp.tools.admin.analytics import admin_get_analytics
+
+        result = await admin_get_analytics(
+            metric="top_products",
+            from_date="this year",
+        )
+
+        assert result["metric"] == "top_products"
+        assert "products" in result
+        # At most 10 entries (default limit)
+        assert len(result["products"]) <= 10
+
+        if result["products"]:
+            top = result["products"][0]
+            assert "sku" in top
+            assert "name" in top
+            assert "qty_ordered" in top
+            assert "revenue" in top
+            # Products must be sorted descending by qty
+            qtys = [p["qty_ordered"] for p in result["products"]]
+            assert qtys == sorted(qtys, reverse=True), "Products not sorted by quantity"
+            log.info(
+                "Top product: %s  qty=%.0f  revenue=%.2f",
+                top["sku"], top["qty_ordered"], top["revenue"],
+            )
+
+    async def test_average_order_value(self) -> None:
+        """Compute average order value — a key health metric."""
+        from magemcp.tools.admin.analytics import admin_get_analytics
+
+        result = await admin_get_analytics(
+            metric="average_order_value",
+            from_date="this year",
+        )
+
+        assert result["metric"] == "average_order_value"
+        assert "value" in result
+        assert "order_count" in result
+        assert isinstance(result["value"], float)
+        assert isinstance(result["order_count"], int)
+        if result["order_count"] > 0:
+            assert result["value"] > 0
+        log.info(
+            "AOV this year: %.2f %s  (from %d orders)",
+            result["value"], result.get("currency"), result["order_count"],
+        )
+
+    async def test_high_value_customers_via_order_history(self) -> None:
+        """Identify potentially high-value customers by fetching their order history.
+
+        Demonstrates the pattern: discover a customer, pull their order history,
+        compute lifetime value — a proxy for the 'high-value customers inactive
+        90+ days' use case.
+        """
+        from magemcp.tools.admin.customer_orders import admin_get_customer_orders
+
+        async with MagentoClient.from_config() as client:
+            customer_id = await _discover_customer_id(client)
+        if customer_id is None:
+            pytest.skip("No customers in the system")
+
+        result = await admin_get_customer_orders(customer_id=customer_id)
+
+        assert result["customer_id"] == customer_id
+        assert "orders" in result
+        assert "total_count" in result
+        assert isinstance(result["orders"], list)
+
+        if result["orders"]:
+            lifetime_value = sum(
+                float(o.get("grand_total", 0)) for o in result["orders"]
+            )
+            last_order_date = result["orders"][0].get("created_at", "unknown")
+            log.info(
+                "Customer %d: %d orders, LTV=%.2f, last_order=%s",
+                customer_id,
+                result["total_count"],
+                lifetime_value,
+                last_order_date,
+            )
+
+    async def test_revenue_by_order_status(self) -> None:
+        """Break down revenue by order status — shows where revenue is at risk (pending/cancelled)."""
+        from magemcp.tools.admin.analytics import admin_get_analytics
+
+        result = await admin_get_analytics(
+            metric="revenue",
+            group_by="status",
+            from_date="this year",
+        )
+
+        assert result["metric"] == "revenue"
+        assert "breakdown" in result
+        # Status breakdown keys should be Magento order statuses
+        known_statuses = {"pending", "processing", "complete", "closed", "canceled", "holded"}
+        for status_key in result["breakdown"]:
+            assert isinstance(status_key, str), f"Non-string status key: {status_key}"
+        log.info(
+            "Revenue by status: %s",
+            {k: f"{v:.2f}" for k, v in result["breakdown"].items()},
+        )
+
+
+class TestBulkOperations:
+    """UC: Bulk Actions — price updates, disabling products, updating descriptions.
+
+    Matches Mirasvit examples:
+      - Reduce prices across product categories
+      - Disable discontinued products automatically
+      - Update multiple product descriptions simultaneously
+
+    Write operations are tested in dry-run mode (confirm=False) to avoid
+    mutating production/integration data. The confirmation gate is the safety
+    mechanism an AI agent would hit before committing bulk changes.
+    """
+
+    async def test_bulk_price_update_requires_confirmation(self) -> None:
+        """Bulk catalog price update triggers the confirmation gate when confirm=False."""
+        from magemcp.tools.admin.bulk import admin_bulk_catalog_update
+        from magemcp.connectors.rest_client import RESTClient
+
+        # Discover real SKUs so the payload is realistic
+        params = RESTClient.search_params(page_size=3, sort_field="entity_id", sort_direction="ASC")
+        async with RESTClient.from_env() as client:
+            data = await client.get("/V1/products", params=params)
+        products = data.get("items") or []
+        if not products:
+            pytest.skip("No products in catalog")
+
+        # Build a realistic "reduce price by 10%" payload
+        updates = [
+            {"sku": p["sku"], "price": round(float(p.get("price", 10)) * 0.9, 2)}
+            for p in products
+        ]
+        result = await admin_bulk_catalog_update(products=updates)
+        assert result.get("confirmation_required") is True
+        log.info(
+            "Bulk price update (dry-run) for %d products: confirmation_required=True",
+            len(updates),
+        )
+
+    async def test_bulk_disable_products_requires_confirmation(self) -> None:
+        """Disabling products in bulk requires explicit confirmation."""
+        from magemcp.tools.admin.bulk import admin_bulk_catalog_update
+        from magemcp.connectors.rest_client import RESTClient
+
+        params = RESTClient.search_params(page_size=2, sort_field="entity_id", sort_direction="ASC")
+        async with RESTClient.from_env() as client:
+            data = await client.get("/V1/products", params=params)
+        products = data.get("items") or []
+        if not products:
+            pytest.skip("No products in catalog")
+
+        # status=2 means disabled in Magento
+        updates = [{"sku": p["sku"], "status": 2} for p in products]
+        result = await admin_bulk_catalog_update(products=updates)
+        assert result.get("confirmation_required") is True
+        log.info(
+            "Bulk disable (dry-run) for %d products: confirmation_required=True",
+            len(updates),
+        )
+
+    async def test_bulk_inventory_update_requires_confirmation(self) -> None:
+        """Bulk inventory quantity update requires explicit confirmation."""
+        from magemcp.tools.admin.bulk import admin_bulk_inventory_update
+        from magemcp.connectors.rest_client import RESTClient
+
+        params = RESTClient.search_params(page_size=3, sort_field="entity_id", sort_direction="ASC")
+        async with RESTClient.from_env() as client:
+            data = await client.get("/V1/products", params=params)
+        products = data.get("items") or []
+        if not products:
+            pytest.skip("No products in catalog")
+
+        items = [{"sku": p["sku"], "quantity": 100.0} for p in products]
+        result = await admin_bulk_inventory_update(items=items)
+        assert result.get("confirmation_required") is True
+        log.info(
+            "Bulk inventory update (dry-run) for %d SKUs: confirmation_required=True",
+            len(items),
+        )
+
+
+class TestComplexWorkflows:
+    """UC: Complex Workflows — multi-step chains across tools.
+
+    Matches Mirasvit examples:
+      - Analyze purchase patterns and create related product configurations
+      - Process 404 reports to establish URL redirects
+      - Audit product data and standardize attribute formats
+    Plus our own scenarios:
+      - Full order-to-tracking workflow (customer support)
+      - Customer purchase history analysis
+    """
+
+    async def test_order_tracking_workflow(self) -> None:
+        """Customer support workflow: find a complete order, resolve tracking numbers.
+
+        Chain: admin_search_orders(status=complete) →
+               admin_get_order_tracking(order_id=entity_id)
+        """
+        from magemcp.tools.admin.search_orders import admin_search_orders
+        from magemcp.tools.admin.order_tracking import admin_get_order_tracking
+        from magemcp.connectors.rest_client import RESTClient
+
+        # Find a complete order that is likely to have shipments
+        orders_result = await admin_search_orders(status="complete", page_size=5)
+        if not orders_result["orders"]:
+            pytest.skip("No complete orders in the system")
+
+        # admin_get_order_tracking needs entity_id, not increment_id
+        # Fetch it via raw REST
+        increment_id = orders_result["orders"][0]["increment_id"]
+        params = RESTClient.search_params(
+            filters={"increment_id": increment_id}, page_size=1
+        )
+        async with RESTClient.from_env() as client:
+            raw = await client.get("/V1/orders", params=params)
+        entity_id = raw["items"][0]["entity_id"]
+
+        tracking_result = await admin_get_order_tracking(order_id=entity_id)
+
+        assert tracking_result["order_id"] == entity_id
+        assert "shipment_count" in tracking_result
+        assert "tracking" in tracking_result
+        assert isinstance(tracking_result["tracking"], list)
+
+        log.info(
+            "Order %s (entity=%d): %d shipment(s), %d tracking number(s): %s",
+            increment_id,
+            entity_id,
+            tracking_result["shipment_count"],
+            len(tracking_result["tracking"]),
+            [t.get("track_number") for t in tracking_result["tracking"]],
+        )
+
+    async def test_purchase_pattern_to_product_detail(self) -> None:
+        """Analyze purchase patterns then drill into top product detail.
+
+        Chain: admin_get_analytics(top_products) → admin_get_product(sku)
+        Demonstrates: 'which products should I create cross-sells for?'
+        """
+        from magemcp.tools.admin.analytics import admin_get_analytics
+        from magemcp.tools.admin.products import admin_get_product
+
+        analytics = await admin_get_analytics(
+            metric="top_products",
+            from_date="this year",
+        )
+
+        if not analytics["products"]:
+            pytest.skip("No order data for top_products analytics")
+
+        top_sku = analytics["products"][0]["sku"]
+        detail = await admin_get_product(sku=top_sku)
+
+        assert detail["sku"] == top_sku
+        assert detail["name"]
+        assert "stock" in detail
+        assert "custom_attributes" in detail
+
+        desc_len = len(detail.get("custom_attributes", {}).get("description") or "")
+        log.info(
+            "Top product %s (%s): price=%.2f  stock=%s  desc_len=%d",
+            top_sku,
+            detail["name"],
+            detail.get("price", 0),
+            detail.get("stock", {}).get("qty") if detail.get("stock") else "n/a",
+            desc_len,
+        )
+
+    async def test_url_audit_workflow(self) -> None:
+        """URL audit: verify product URLs resolve correctly via c_resolve_url.
+
+        Demonstrates: detecting broken URLs or 404-prone paths in the catalog.
+        Chain: admin_search_products → c_resolve_url → verify resolution type
+        """
+        from magemcp.tools.admin.products import admin_search_products
+        from magemcp.tools.customer.resolve_url import c_resolve_url
+        from magemcp.connectors.graphql_client import GraphQLClient
+
+        products = await admin_search_products(page_size=5, status=1)
+        if not products["products"]:
+            pytest.skip("No products in catalog")
+
+        # Get url_key for the first product from GraphQL (admin REST doesn't surface url_key easily)
+        sku = products["products"][0]["sku"]
+        async with GraphQLClient.from_env() as gql:
+            data = await gql.query(
+                """
+                query($sku: String!) {
+                  products(filter: { sku: { eq: $sku } }) {
+                    items { sku url_key }
+                  }
+                }
+                """,
+                variables={"sku": sku},
+            )
+        items = data.get("products", {}).get("items", [])
+        if not items or not items[0].get("url_key"):
+            pytest.skip(f"Product {sku} has no url_key")
+
+        url_key = items[0]["url_key"]
+        result = await c_resolve_url(url=f"{url_key}.html")
+
+        # Should resolve to a product page
+        assert result.get("type") in ("SimpleProduct", "ConfigurableProduct", "BundleProduct",
+                                       "GroupedProduct", "VirtualProduct", "DownloadableProduct")
+        assert result.get("sku") == sku
+        log.info("URL audit: %s.html → %s (sku=%s)", url_key, result["type"], result["sku"])
+
+    async def test_product_data_audit(self) -> None:
+        """Audit product attribute completeness — prices, images, descriptions.
+
+        Demonstrates: 'find products that need data enrichment before a campaign.'
+        """
+        from magemcp.tools.admin.products import admin_search_products, admin_get_product
+
+        products = await admin_search_products(page_size=10, status=1)
+        if not products["products"]:
+            pytest.skip("No products in catalog")
+
+        audit: list[dict] = []
+        for p in products["products"][:5]:  # check 5 to keep test fast
+            detail = await admin_get_product(sku=p["sku"])
+            attrs = detail.get("custom_attributes", {})
+            audit.append({
+                "sku": p["sku"],
+                "name": detail.get("name"),
+                "has_price": detail.get("price") is not None and detail.get("price", 0) > 0,
+                "has_images": len(detail.get("media_gallery", [])) > 0,
+                "has_description": bool(attrs.get("description")),
+                "has_short_description": bool(attrs.get("short_description")),
+            })
+
+        assert len(audit) > 0
+        complete = sum(
+            1 for a in audit
+            if a["has_price"] and a["has_images"] and a["has_description"]
+        )
+        log.info(
+            "Product data audit (%d checked): %d fully complete, details=%s",
+            len(audit),
+            complete,
+            [{a["sku"]: {k: v for k, v in a.items() if k != "sku" and k != "name"}} for a in audit],
+        )

@@ -70,6 +70,10 @@ class TestDateBucket:
     def test_empty_date(self) -> None:
         assert _date_bucket("", "day") == "unknown"
 
+    def test_unknown_group_by_returns_date_part(self) -> None:
+        # fallback branch: unknown group_by returns YYYY-MM-DD date_part
+        assert _date_bucket("2025-03-15 10:30:00", "unknown_granularity") == "2025-03-15"
+
 
 class TestCalcOrderCount:
     def test_no_group_by(self) -> None:
@@ -231,3 +235,32 @@ class TestAdminGetAnalytics:
         from magemcp.server import mcp
         tool_names = [t.name for t in await mcp.list_tools()]
         assert "admin_get_analytics" in tool_names
+
+    async def test_aov_metric(self, mock_env: None, respx_mock: respx.MockRouter) -> None:
+        orders = [_make_order(grand_total=100.0), _make_order(grand_total=200.0)]
+        respx_mock.get(f"{BASE_URL}/rest/{STORE_CODE}/V1/orders").mock(
+            return_value=Response(200, json=_wrap_search(orders))
+        )
+        result = await admin_get_analytics(metric="average_order_value")
+        assert result["metric"] == "average_order_value"
+        assert result["value"] == 150.0
+
+    async def test_top_products_metric(self, mock_env: None, respx_mock: respx.MockRouter) -> None:
+        orders = [_make_order(items=[
+            {"sku": "SKU1", "name": "Product 1", "qty_ordered": 2, "parent_item_id": None},
+        ])]
+        respx_mock.get(f"{BASE_URL}/rest/{STORE_CODE}/V1/orders").mock(
+            return_value=Response(200, json=_wrap_search(orders))
+        )
+        result = await admin_get_analytics(metric="top_products")
+        assert result["metric"] == "top_products"
+        assert len(result["products"]) >= 1
+
+    async def test_status_filter_applied(self, mock_env: None, respx_mock: respx.MockRouter) -> None:
+        route = respx_mock.get(f"{BASE_URL}/rest/{STORE_CODE}/V1/orders").mock(
+            return_value=Response(200, json=_wrap_search([]))
+        )
+        await admin_get_analytics(metric="order_count", status_filter="complete")
+        url = str(route.calls[0].request.url)
+        assert "status" in url
+        assert "complete" in url

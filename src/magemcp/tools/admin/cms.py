@@ -5,11 +5,11 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 
 from magemcp.connectors.errors import MagentoNotFoundError
 from magemcp.connectors.rest_client import RESTClient
-from magemcp.tools.admin._confirmation import needs_confirmation
+from magemcp.tools.admin._confirmation import elicit_confirmation
 
 log = logging.getLogger(__name__)
 
@@ -122,11 +122,12 @@ async def admin_update_cms_page(
     meta_description: str | None = None,
     confirm: bool = False,
     store_scope: str = "default",
+    ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Update a CMS page. Only specified fields are changed. Requires confirmation."""
     log.info("admin_update_cms_page id=%s confirm=%s", page_id, confirm)
 
-    prompt = needs_confirmation(f"update CMS page {page_id}", str(page_id), confirm)
+    prompt = await elicit_confirmation(ctx, f"update CMS page {page_id}", str(page_id), confirm)
     if prompt:
         return prompt
 
@@ -170,8 +171,9 @@ def register_cms_tools(mcp: FastMCP) -> None:
         name="admin_get_cms_page",
         title="Get CMS Page",
         description=(
-            "Get a CMS page by numeric ID or URL identifier. "
-            "Returns full page including HTML content, meta fields, and active status."
+            "Get a CMS page by numeric ID or URL identifier slug (e.g. 'about-us', 'privacy-policy'). "
+            "Returns full page: title, HTML content body, meta description, and active status. "
+            "Use admin_search_cms_pages to discover identifiers first."
         ),
         annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
     )(admin_get_cms_page)
@@ -180,8 +182,10 @@ def register_cms_tools(mcp: FastMCP) -> None:
         name="admin_search_cms_pages",
         title="Search CMS Pages",
         description=(
-            "Search CMS pages by title, identifier, or active status. "
-            "Title and identifier support wildcards (e.g. %about%)."
+            "Search CMS pages by title, URL identifier, or active status. "
+            "Title and identifier filters support wildcards (e.g. %about%, %policy%). "
+            "Returns page summaries with their identifiers. "
+            "Use admin_get_cms_page to read the full HTML content."
         ),
         annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
     )(admin_search_cms_pages)
@@ -190,8 +194,11 @@ def register_cms_tools(mcp: FastMCP) -> None:
         name="admin_update_cms_page",
         title="Update CMS Page",
         description=(
-            "Update a CMS page (title, content, active status, meta fields). "
-            "Only specified fields are changed. Requires confirmation."
+            "Update a CMS page's content or settings by numeric ID. Only fields you provide are changed — "
+            "omitted fields are left untouched. Editable: title, HTML content body, content_heading, "
+            "is_active (publish/unpublish), meta_title, meta_description. "
+            "Use admin_get_cms_page first to read current values. "
+            "Requires confirmation — call twice with confirm=True to proceed."
         ),
         annotations={"readOnlyHint": False, "destructiveHint": True, "idempotentHint": False, "openWorldHint": True},
     )(admin_update_cms_page)

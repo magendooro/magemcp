@@ -5,11 +5,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 
 from magemcp.connectors.errors import MagentoNotFoundError
 from magemcp.connectors.rest_client import RESTClient
-from magemcp.tools.admin._confirmation import needs_confirmation
+from magemcp.tools.admin._confirmation import elicit_confirmation
+from magemcp.utils.idempotency import idempotency_store
 
 log = logging.getLogger(__name__)
 
@@ -118,7 +119,9 @@ async def admin_generate_coupons(
     length: int = 12,
     format: str = "alphanum",
     confirm: bool = False,
+    idempotency_key: str | None = None,
     store_scope: str = "default",
+    ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Generate coupon codes for a cart price rule. Requires confirmation."""
     log.info(
@@ -126,8 +129,17 @@ async def admin_generate_coupons(
         rule_id, quantity, format, confirm,
     )
 
-    prompt = needs_confirmation(
-        f"generate {quantity} coupon(s) for rule {rule_id}", str(rule_id), confirm
+    _VALID_FORMATS = ("alphanum", "alpha", "num")
+    if format not in _VALID_FORMATS:
+        raise ValueError(f"Invalid coupon format '{format}'. Must be one of: {', '.join(_VALID_FORMATS)}")
+
+    if idempotency_key:
+        stored = idempotency_store.get("admin_generate_coupons", idempotency_key)
+        if stored is not None:
+            return {**stored, "idempotent_replay": True}
+
+    prompt = await elicit_confirmation(
+        ctx, f"generate {quantity} coupon(s) for rule {rule_id}", str(rule_id), confirm
     )
     if prompt:
         return prompt
@@ -150,12 +162,15 @@ async def admin_generate_coupons(
 
     # Magento returns a list of generated coupon codes
     codes = result if isinstance(result, list) else []
-    return {
+    out = {
         "success": True,
         "rule_id": rule_id,
         "generated": len(codes),
         "coupon_codes": codes,
     }
+    if idempotency_key:
+        idempotency_store.set("admin_generate_coupons", idempotency_key, out)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -171,8 +186,11 @@ def register_promotion_tools(mcp: FastMCP) -> None:
         title="Search Sales Rules",
         description=(
             "Search cart price rules (promotions) by name or active status. "
-            "Name filter supports wildcards. Returns rule summaries including "
-            "discount type, coupon type, and validity dates."
+            "Use when answering 'what promotions are running?' or 'is there a discount for X?'. "
+            "Name filter supports SQL wildcards (e.g. %summer%, %VIP%). "
+            "coupon_type: 1=no coupon, 2=specific coupon, 3=auto-generated. "
+            "Returns summaries with discount_amount, simple_action, validity dates, and coupon code. "
+            "Use admin_get_sales_rule for full conditions and usage statistics."
         ),
         annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
     )(admin_search_sales_rules)
@@ -181,8 +199,10 @@ def register_promotion_tools(mcp: FastMCP) -> None:
         name="admin_get_sales_rule",
         title="Get Sales Rule",
         description=(
-            "Get full detail for a cart price rule by ID, including conditions, "
-            "actions, discount configuration, and usage statistics."
+            "Get full detail for a cart price rule by rule_id. "
+            "Returns complete discount configuration: conditions (what cart must match), "
+            "actions (what discount applies), usage limits, times_used, and store labels. "
+            "Use admin_search_sales_rules to find rule IDs first."
         ),
         annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
     )(admin_get_sales_rule)
@@ -191,9 +211,12 @@ def register_promotion_tools(mcp: FastMCP) -> None:
         name="admin_generate_coupons",
         title="Generate Coupons",
         description=(
-            "Generate coupon codes for a cart price rule. "
-            "format: 'alphanum' (default), 'alpha', or 'num'. "
-            "Requires confirmation — call with confirm=True to proceed."
+            "Generate one or more unique coupon codes for an existing cart price rule. "
+            "The rule must have coupon_type=3 (auto-generated). "
+            "format: 'alphanum' (default), 'alpha', or 'num'. length: minimum 6 characters. "
+            "Returns the list of generated coupon codes. "
+            "Pass idempotency_key to safely retry without generating duplicates. "
+            "Requires confirmation — call twice with confirm=True to proceed."
         ),
         annotations={"readOnlyHint": False, "destructiveHint": True, "idempotentHint": False, "openWorldHint": True},
     )(admin_generate_coupons)

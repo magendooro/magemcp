@@ -241,6 +241,125 @@ class TestToolEndToEnd:
 
 
 # ---------------------------------------------------------------------------
+# Tool function invocation (exercises get_inventory.py lines 24-94)
+# ---------------------------------------------------------------------------
+
+
+BASE_URL = "https://magento.test"
+TOKEN = "admin-token-123"
+STORE_CODE = "default"
+
+
+@pytest.fixture
+def mock_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MAGENTO_BASE_URL", BASE_URL)
+    monkeypatch.setenv("MAGEMCP_ADMIN_TOKEN", TOKEN)
+
+
+class TestToolFunction:
+    async def test_single_sku_in_stock(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        """Tool function returns salable_quantity and is_salable for a single SKU."""
+        respx_mock.get(
+            f"{BASE_URL}/rest/{STORE_CODE}/V1/inventory/get-product-salable-quantity/WJ12/1",
+        ).mock(return_value=httpx.Response(200, json=25))
+        respx_mock.get(
+            f"{BASE_URL}/rest/{STORE_CODE}/V1/inventory/is-product-salable/WJ12/1",
+        ).mock(return_value=httpx.Response(200, json=True))
+
+        from magemcp.tools.admin.get_inventory import admin_get_inventory
+
+        result = await admin_get_inventory(skus=["WJ12"])
+        assert isinstance(result, dict)
+        assert result["stock_id"] == 1
+        assert len(result["items"]) == 1
+        assert result["items"][0]["sku"] == "WJ12"
+        assert result["items"][0]["salable_quantity"] == 25.0
+        assert result["items"][0]["is_salable"] is True
+        assert result["items"][0]["error"] is None
+
+    async def test_sku_not_found_records_error(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        """A 404 for a SKU is captured in the error field, not raised."""
+        respx_mock.get(
+            f"{BASE_URL}/rest/{STORE_CODE}/V1/inventory/get-product-salable-quantity/NOPE/1",
+        ).mock(return_value=httpx.Response(
+            404, json={"message": "The product that was requested doesn't exist."},
+        ))
+        respx_mock.get(
+            f"{BASE_URL}/rest/{STORE_CODE}/V1/inventory/is-product-salable/NOPE/1",
+        ).mock(return_value=httpx.Response(200, json=False))
+
+        from magemcp.tools.admin.get_inventory import admin_get_inventory
+
+        result = await admin_get_inventory(skus=["NOPE"])
+        assert result["items"][0]["error"] is not None
+        assert result["items"][0]["is_salable"] is False
+
+    async def test_multiple_skus(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        """Two SKUs produce two entries in items."""
+        for sku, qty, salable in [("WJ12", 10, True), ("WT03", 0, False)]:
+            respx_mock.get(
+                f"{BASE_URL}/rest/{STORE_CODE}/V1/inventory/get-product-salable-quantity/{sku}/1",
+            ).mock(return_value=httpx.Response(200, json=qty))
+            respx_mock.get(
+                f"{BASE_URL}/rest/{STORE_CODE}/V1/inventory/is-product-salable/{sku}/1",
+            ).mock(return_value=httpx.Response(200, json=salable))
+
+        from magemcp.tools.admin.get_inventory import admin_get_inventory
+
+        result = await admin_get_inventory(skus=["WJ12", "WT03"])
+        assert len(result["items"]) == 2
+
+    async def test_custom_stock_id_in_url(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        """Custom stock_id is reflected in the REST endpoint URL."""
+        qty_route = respx_mock.get(
+            f"{BASE_URL}/rest/{STORE_CODE}/V1/inventory/get-product-salable-quantity/WJ12/3",
+        ).mock(return_value=httpx.Response(200, json=5))
+        respx_mock.get(
+            f"{BASE_URL}/rest/{STORE_CODE}/V1/inventory/is-product-salable/WJ12/3",
+        ).mock(return_value=httpx.Response(200, json=True))
+
+        from magemcp.tools.admin.get_inventory import admin_get_inventory
+
+        result = await admin_get_inventory(skus=["WJ12"], stock_id=3)
+        assert qty_route.called
+        assert result["stock_id"] == 3
+
+    async def test_is_salable_error_captured(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        """Error from is-product-salable endpoint is captured in error field."""
+        respx_mock.get(
+            f"{BASE_URL}/rest/{STORE_CODE}/V1/inventory/get-product-salable-quantity/WJ12/1",
+        ).mock(return_value=httpx.Response(200, json=10))
+        # is-product-salable returns 500 — should be caught and stored in error
+        respx_mock.get(
+            f"{BASE_URL}/rest/{STORE_CODE}/V1/inventory/is-product-salable/WJ12/1",
+        ).mock(return_value=httpx.Response(500, text="Internal Server Error"))
+
+        from magemcp.tools.admin.get_inventory import admin_get_inventory
+
+        result = await admin_get_inventory(skus=["WJ12"])
+        item = result["items"][0]
+        assert item["salable_quantity"] == 10.0
+        assert item["is_salable"] is False
+        assert item["error"] is not None
+
+    async def test_is_registered(self) -> None:
+        """Tool is present in the MCP server."""
+        from magemcp.server import mcp
+        names = [t.name for t in await mcp.list_tools()]
+        assert "admin_get_inventory" in names
+
+
+# ---------------------------------------------------------------------------
 # Output serialization
 # ---------------------------------------------------------------------------
 

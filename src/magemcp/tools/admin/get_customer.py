@@ -80,16 +80,70 @@ def parse_customer(raw: dict[str, Any]) -> CGetCustomerOutput:
 # ---------------------------------------------------------------------------
 
 
+async def admin_get_customer(
+    customer_id: int | None = None,
+    email: str | None = None,
+    website_id: int = 1,
+    store_scope: str = "default",
+) -> dict[str, Any]:
+    """Get a customer by ID or email — full admin view."""
+    inp = CGetCustomerInput(
+        customer_id=customer_id,
+        email=email,
+        website_id=website_id,
+        store_scope=store_scope,
+        pii_mode="full",
+    )
+
+    log.info(
+        "admin_get_customer id=%s email=%s store=%s",
+        inp.customer_id,
+        inp.email,
+        inp.store_scope,
+    )
+
+    async with RESTClient.from_env() as client:
+        if inp.customer_id is not None:
+            # Direct ID lookup
+            data = await client.get(
+                f"/V1/customers/{inp.customer_id}",
+                store_code=inp.store_scope,
+            )
+            result = parse_customer(data)
+            return result.model_dump(mode="json")
+
+        # Email lookup via search
+        params = RESTClient.search_params(
+            filters={
+                "email": inp.email,
+                "website_id": inp.website_id,
+            },
+            page_size=1,
+        )
+        data = await client.get(
+            "/V1/customers/search",
+            params=params,
+            store_code=inp.store_scope,
+        )
+
+    items = data.get("items") or []
+    if not items:
+        raise MagentoNotFoundError("Customer not found.")
+
+    result = parse_customer(items[0])
+    return result.model_dump(mode="json")
+
+
 def register_get_customer(mcp: FastMCP) -> None:
     """Register the admin_get_customer tool on the given MCP server."""
-
-    @mcp.tool(
+    mcp.tool(
         name="admin_get_customer",
         title="Get Customer",
         description=(
-            "Look up a customer by internal ID or email address. Returns full customer "
-            "profile including name, email, DOB, customer group, account dates, all "
-            "addresses, custom attributes, and extension attributes (e.g. B2B company info)."
+            "Get a customer's full profile by customer ID or email. Returns name, email, "
+            "DOB, customer group, registration date, all saved addresses, and custom attributes. "
+            "Full unmasked data — admin context only. Use admin_search_customers first if you "
+            "only have partial info (name, domain, etc.)."
         ),
         annotations={
             "readOnlyHint": True,
@@ -97,56 +151,4 @@ def register_get_customer(mcp: FastMCP) -> None:
             "idempotentHint": True,
             "openWorldHint": True,
         },
-    )
-    async def admin_get_customer(
-        customer_id: int | None = None,
-        email: str | None = None,
-        website_id: int = 1,
-        store_scope: str = "default",
-    ) -> dict[str, Any]:
-        """Get a customer by ID or email — full admin view."""
-        inp = CGetCustomerInput(
-            customer_id=customer_id,
-            email=email,
-            website_id=website_id,
-            store_scope=store_scope,
-            pii_mode="full",
-        )
-
-        log.info(
-            "admin_get_customer id=%s email=%s store=%s",
-            inp.customer_id,
-            inp.email,
-            inp.store_scope,
-        )
-
-        async with RESTClient.from_env() as client:
-            if inp.customer_id is not None:
-                # Direct ID lookup
-                data = await client.get(
-                    f"/V1/customers/{inp.customer_id}",
-                    store_code=inp.store_scope,
-                )
-                result = parse_customer(data)
-                return result.model_dump(mode="json")
-
-            # Email lookup via search
-            params = RESTClient.search_params(
-                filters={
-                    "email": inp.email,
-                    "website_id": inp.website_id,
-                },
-                page_size=1,
-            )
-            data = await client.get(
-                "/V1/customers/search",
-                params=params,
-                store_code=inp.store_scope,
-            )
-
-        items = data.get("items") or []
-        if not items:
-            raise MagentoNotFoundError("Customer not found.")
-
-        result = parse_customer(items[0])
-        return result.model_dump(mode="json")
+    )(admin_get_customer)

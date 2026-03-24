@@ -93,19 +93,87 @@ async def admin_search_customers(
 
 
 # ---------------------------------------------------------------------------
+# Customer group lookup
+# ---------------------------------------------------------------------------
+
+
+async def admin_get_customer_groups(
+    store_scope: str = "default",
+) -> dict[str, Any]:
+    """Return all customer groups with their integer IDs.
+
+    Customer groups are referenced by integer ID throughout the Magento REST API
+    (e.g. when filtering customers, or reading which groups a sales rule applies to).
+    Use this tool to map a group name like 'Wholesale' to its ID before filtering.
+
+    Standard Magento groups (IDs may vary per installation):
+      0 = NOT LOGGED IN, 1 = General, 2 = Wholesale, 3 = Retailer
+
+    Workflow::
+
+        groups = await admin_get_customer_groups()
+        # → {"groups": [{"id": 2, "code": "Wholesale", ...}, ...]}
+
+        customers = await admin_search_customers(group_id=2)
+    """
+    log.info("admin_get_customer_groups")
+
+    params = RESTClient.search_params(page_size=200, current_page=1)
+
+    async with RESTClient.from_env() as client:
+        data = await client.get("/V1/customerGroups/search", params=params, store_code=store_scope)
+
+    items = data.get("items") or []
+    return {
+        "total_count": data.get("total_count", len(items)),
+        "groups": [
+            {
+                "id": g.get("id"),
+                "code": g.get("code"),
+                "tax_class_id": g.get("tax_class_id"),
+                "tax_class_name": g.get("tax_class_name"),
+            }
+            for g in items
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
 # Tool registration
 # ---------------------------------------------------------------------------
 
 
 def register_search_customers(mcp: FastMCP) -> None:
-    """Register the admin_search_customers tool on the given MCP server."""
+    """Register admin customer tools on the given MCP server."""
+
+    mcp.tool(
+        name="admin_get_customer_groups",
+        title="Get Customer Groups",
+        description=(
+            "Return all customer groups with their integer IDs. "
+            "Customer groups are referenced by integer ID throughout the REST API — "
+            "use this tool to map a group name ('Wholesale', 'Retailer') to its ID "
+            "before filtering customers or interpreting sales rule customer_group_ids. "
+            "Standard groups: 0=NOT LOGGED IN, 1=General, 2=Wholesale, 3=Retailer "
+            "(IDs may differ per installation)."
+        ),
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": True,
+        },
+    )(admin_get_customer_groups)
+
     mcp.tool(
         name="admin_search_customers",
         title="Search Customers",
         description=(
-            "Search customers by email, name, group, or creation date. "
-            "Email and name filters support wildcards (e.g. %@example.com). "
-            "Returns a list of customer summaries with full email and name — no PII masking."
+            "Search customers by email, first/last name, group, or registration date. "
+            "Email and name filters support SQL wildcards (e.g. %@example.com, %Smith%). "
+            "group_id is an integer — use admin_get_customer_groups to look up group IDs by name. "
+            "from_date accepts 'today', 'this month', 'last month', or ISO dates. "
+            "Returns full unmasked email and name (admin only). Use admin_get_customer for full profile."
         ),
         annotations={
             "readOnlyHint": True,

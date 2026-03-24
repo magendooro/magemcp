@@ -175,15 +175,59 @@ def _parse_response(
 # ---------------------------------------------------------------------------
 
 
+async def c_search_products(
+    search: str | None = None,
+    category_id: str | None = None,
+    price_from: float | None = None,
+    price_to: float | None = None,
+    in_stock_only: bool = False,
+    store_scope: str = "default",
+    page_size: int = 20,
+    current_page: int = 1,
+    sort_field: str = "relevance",
+    sort_direction: str = "ASC",
+) -> CSearchProductsOutput:
+    """Search the storefront catalog."""
+    inp = CSearchProductsInput(
+        search=search,
+        category_id=category_id,
+        price_from=price_from,
+        price_to=price_to,
+        in_stock_only=in_stock_only,
+        store_scope=store_scope,
+        page_size=page_size,
+        current_page=current_page,
+        sort_field=sort_field,
+        sort_direction=sort_direction,
+    )
+
+    variables = _build_variables(inp)
+    log.info("c_search_products store=%s variables=%s", inp.store_scope, variables)
+
+    async with GraphQLClient.from_env() as client:
+        data = await client.query(
+            SEARCH_PRODUCTS_QUERY,
+            variables=variables,
+            store_code=inp.store_scope,
+        )
+
+    result = _parse_response(data, inp.in_stock_only)
+    return result.model_dump(mode="json")
+
+
 def register_search_products(mcp: FastMCP) -> None:
     """Register the c_search_products tool on the given MCP server."""
-
-    @mcp.tool(
+    mcp.tool(
         name="c_search_products",
         title="Search Products",
         description=(
-            "Search the product catalog as a shopper would see it. "
-            "Returns storefront-visible products with pricing, images, and stock status."
+            "Search the storefront product catalog by keyword, category, or price range — "
+            "exactly what a shopper sees (no disabled/hidden products). "
+            "Returns SKU, name, url_key, stock_status (IN_STOCK/OUT_OF_STOCK), "
+            "regular and final pricing with any discount percent, and thumbnail image. "
+            "Use in_stock_only=True to filter to orderable items. "
+            "sort_field: relevance (default with search term), name, price. "
+            "Use c_get_product for full description, images, and configurable options."
         ),
         annotations={
             "readOnlyHint": True,
@@ -191,42 +235,4 @@ def register_search_products(mcp: FastMCP) -> None:
             "idempotentHint": True,
             "openWorldHint": True,
         },
-    )
-    async def c_search_products(
-        search: str | None = None,
-        category_id: str | None = None,
-        price_from: float | None = None,
-        price_to: float | None = None,
-        in_stock_only: bool = False,
-        store_scope: str = "default",
-        page_size: int = 20,
-        current_page: int = 1,
-        sort_field: str = "relevance",
-        sort_direction: str = "ASC",
-    ) -> dict[str, Any]:
-        """Search the storefront catalog."""
-        inp = CSearchProductsInput(
-            search=search,
-            category_id=category_id,
-            price_from=price_from,
-            price_to=price_to,
-            in_stock_only=in_stock_only,
-            store_scope=store_scope,
-            page_size=page_size,
-            current_page=current_page,
-            sort_field=sort_field,
-            sort_direction=sort_direction,
-        )
-
-        variables = _build_variables(inp)
-        log.info("c_search_products store=%s variables=%s", inp.store_scope, variables)
-
-        async with GraphQLClient.from_env() as client:
-            data = await client.query(
-                SEARCH_PRODUCTS_QUERY,
-                variables=variables,
-                store_code=inp.store_scope,
-            )
-
-        result = _parse_response(data, inp.in_stock_only)
-        return result.model_dump(mode="json")
+    )(c_search_products)

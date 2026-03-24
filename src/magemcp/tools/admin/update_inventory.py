@@ -5,10 +5,10 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 
 from magemcp.connectors.rest_client import RESTClient
-from magemcp.tools.admin._confirmation import needs_confirmation
+from magemcp.tools.admin._confirmation import elicit_confirmation
 
 log = logging.getLogger(__name__)
 
@@ -25,6 +25,7 @@ async def admin_update_inventory(
     status: int = 1,
     confirm: bool = False,
     store_scope: str = "default",
+    ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Update source item quantity for a SKU. Requires confirmation."""
     log.info(
@@ -32,7 +33,7 @@ async def admin_update_inventory(
         sku, quantity, source_code, confirm,
     )
 
-    prompt = needs_confirmation(f"set inventory for {sku} to {quantity}", sku, confirm)
+    prompt = await elicit_confirmation(ctx, f"set inventory for {sku} to {quantity}", sku, confirm)
     if prompt:
         return prompt
 
@@ -72,9 +73,10 @@ def register_update_inventory(mcp: FastMCP) -> None:
         name="admin_update_inventory",
         title="Update Inventory",
         description=(
-            "Update the inventory source item quantity for a SKU. "
-            "Uses the Magento MSI source-items endpoint. "
-            "Requires confirmation — call with confirm=True to proceed."
+            "Update the physical stock quantity for a SKU at a specific warehouse source. "
+            "source_code is the MSI source identifier (usually 'default'). "
+            "Use admin_get_inventory to check current levels first. "
+            "Requires confirmation — call twice with confirm=True to proceed."
         ),
         annotations={
             "readOnlyHint": False,

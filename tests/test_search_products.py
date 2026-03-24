@@ -17,6 +17,7 @@ from magemcp.tools.customer.search_products import (
     _build_variables,
     _parse_product,
     _parse_response,
+    c_search_products,
 )
 
 BASE_URL = "https://magento.test"
@@ -486,3 +487,47 @@ class TestOutputSerialization:
         assert dumped["page_info"]["current_page"] == 1
         # Decimal values should serialize as strings or numbers
         assert dumped["products"][0]["min_price"]["final_price"]["value"] is not None
+
+
+# ---------------------------------------------------------------------------
+# Tool function (module-level)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def mock_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MAGENTO_BASE_URL", BASE_URL)
+
+
+class TestToolFunction:
+    async def test_returns_products(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        gql_data = _make_gql_response(items=[_make_gql_product(sku="WJ12")])
+        respx_mock.post(f"{BASE_URL}/graphql").mock(
+            return_value=httpx.Response(200, json={"data": gql_data})
+        )
+        result = await c_search_products(search="jacket")
+        assert isinstance(result["products"], list)
+        assert result["products"][0]["sku"] == "WJ12"
+
+    async def test_store_scope_sent_as_header(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        gql_data = _make_gql_response()
+        route = respx_mock.post(f"{BASE_URL}/graphql").mock(
+            return_value=httpx.Response(200, json={"data": gql_data})
+        )
+        await c_search_products(store_scope="fr")
+        assert route.calls[0].request.headers.get("store") == "fr"
+
+    async def test_empty_results(
+        self, mock_env: None, respx_mock: respx.MockRouter,
+    ) -> None:
+        gql_data = _make_gql_response(items=[], total_count=0)
+        respx_mock.post(f"{BASE_URL}/graphql").mock(
+            return_value=httpx.Response(200, json={"data": gql_data})
+        )
+        result = await c_search_products(search="nonexistent")
+        assert result["products"] == []
+        assert result["total_count"] == 0

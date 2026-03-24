@@ -201,16 +201,53 @@ def parse_order(order: dict[str, Any]) -> CGetOrderOutput:
 # ---------------------------------------------------------------------------
 
 
+async def admin_get_order(
+    increment_id: str,
+    store_scope: str = "default",
+) -> dict[str, Any]:
+    """Get an order by increment ID — full admin view."""
+    inp = CGetOrderInput(
+        increment_id=increment_id,
+        store_scope=store_scope,
+        pii_mode="full",
+    )
+
+    log.info(
+        "admin_get_order increment_id=%s store=%s",
+        inp.increment_id,
+        inp.store_scope,
+    )
+
+    params = RESTClient.search_params(
+        filters={"increment_id": inp.increment_id},
+        page_size=1,
+    )
+
+    async with RESTClient.from_env() as client:
+        data = await client.get(
+            "/V1/orders",
+            params=params,
+            store_code=inp.store_scope,
+        )
+
+    items = data.get("items") or []
+    if not items:
+        raise MagentoNotFoundError(f"Order '{inp.increment_id}' not found.")
+
+    result = parse_order(items[0])
+    return result.model_dump(mode="json")
+
+
 def register_get_order(mcp: FastMCP) -> None:
     """Register the admin_get_order tool on the given MCP server."""
-
-    @mcp.tool(
+    mcp.tool(
         name="admin_get_order",
         title="Get Order",
         description=(
-            "Fetch an order by its increment ID. Returns order status, "
-            "totals, line items, shipment tracking, recent comments, "
-            "and full customer details (name, email, phone, addresses)."
+            "Get complete order detail by increment ID (the customer-facing number like '000000042'). "
+            "Returns: status, all line items with SKUs/prices, shipping and billing addresses, "
+            "shipment/invoice/credit-memo IDs, last 3 status comments, and full customer info. "
+            "Use admin_search_orders first if you only have partial information."
         ),
         annotations={
             "readOnlyHint": True,
@@ -218,39 +255,4 @@ def register_get_order(mcp: FastMCP) -> None:
             "idempotentHint": True,
             "openWorldHint": True,
         },
-    )
-    async def admin_get_order(
-        increment_id: str,
-        store_scope: str = "default",
-    ) -> dict[str, Any]:
-        """Get an order by increment ID — full admin view."""
-        inp = CGetOrderInput(
-            increment_id=increment_id,
-            store_scope=store_scope,
-            pii_mode="full",
-        )
-
-        log.info(
-            "admin_get_order increment_id=%s store=%s",
-            inp.increment_id,
-            inp.store_scope,
-        )
-
-        params = RESTClient.search_params(
-            filters={"increment_id": inp.increment_id},
-            page_size=1,
-        )
-
-        async with RESTClient.from_env() as client:
-            data = await client.get(
-                "/V1/orders",
-                params=params,
-                store_code=inp.store_scope,
-            )
-
-        items = data.get("items") or []
-        if not items:
-            raise MagentoNotFoundError(f"Order '{inp.increment_id}' not found.")
-
-        result = parse_order(items[0])
-        return result.model_dump(mode="json")
+    )(admin_get_order)

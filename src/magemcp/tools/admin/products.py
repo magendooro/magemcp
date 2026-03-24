@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 
 from magemcp.connectors.errors import MagentoNotFoundError
 from magemcp.connectors.rest_client import RESTClient
@@ -17,7 +18,7 @@ from magemcp.models.product import (
     StockItem,
     TierPrice,
 )
-from magemcp.tools.admin._confirmation import needs_confirmation
+from magemcp.tools.admin._confirmation import elicit_confirmation
 
 log = logging.getLogger(__name__)
 
@@ -133,6 +134,103 @@ def _parse_product_detail(raw: dict[str, Any]) -> ProductDetail:
 
 
 # ---------------------------------------------------------------------------
+# EAV value resolution helpers
+# ---------------------------------------------------------------------------
+
+# These frontend_input types store integer option IDs, not label text.
+_OPTION_ID_INPUT_TYPES = frozenset({"select", "multiselect", "swatch_visual", "swatch_text"})
+
+
+def _looks_like_option_id(value: Any) -> bool:
+    """Return True if value already appears to be a numeric option ID (or comma-separated IDs).
+
+    If True, we skip the attribute lookup — the caller already has the correct ID.
+    """
+    if isinstance(value, bool):
+        return False  # booleans must go through normalisation
+    if isinstance(value, int):
+        return True
+    if isinstance(value, str):
+        parts = [p.strip() for p in value.split(",")]
+        return bool(parts) and all(p.isdigit() for p in parts)
+    return False
+
+
+async def _resolve_eav_value(
+    attribute_code: str,
+    value: Any,
+    *,
+    store_code: str,
+) -> Any:
+    """Resolve a human-readable value to the format Magento expects for this attribute type.
+
+    - select / swatch_visual / swatch_text: non-numeric strings are matched
+      case-insensitively against the option list and replaced with the option ID.
+    - multiselect: same, but value may be a comma-separated list of labels.
+    - boolean: normalises Yes/No/True/False → "1"/"0".
+    - all other types (text, textarea, date, price, …): passed through unchanged.
+
+    Numeric strings / ints are treated as already-resolved option IDs and are
+    returned as-is without an API round-trip.
+
+    Raises ValueError with the list of available options if a label cannot be matched.
+    """
+    if _looks_like_option_id(value):
+        return str(value) if isinstance(value, int) else value
+
+    str_value = str(value)
+
+    try:
+        async with RESTClient.from_env() as client:
+            attr_raw = await client.get(f"/V1/products/attributes/{attribute_code}")
+    except Exception as exc:
+        log.warning(
+            "admin_update_product: could not fetch attribute def for %s: %s — passing value through",
+            attribute_code, exc,
+        )
+        return value
+
+    frontend_input: str = attr_raw.get("frontend_input") or "text"
+
+    # boolean → "1" / "0"
+    if frontend_input == "boolean":
+        if str_value.lower() in ("1", "true", "yes"):
+            return "1"
+        if str_value.lower() in ("0", "false", "no"):
+            return "0"
+        raise ValueError(
+            f"Attribute '{attribute_code}' is boolean. "
+            f"Use 'Yes'/'No', 'True'/'False', or '1'/'0'."
+        )
+
+    # Non-option types — pass through unchanged
+    if frontend_input not in _OPTION_ID_INPUT_TYPES:
+        return value
+
+    # select / multiselect / swatch — resolve label → option ID
+    options = [o for o in (attr_raw.get("options") or []) if o.get("value") not in ("", None)]
+    option_map = {o["label"].strip().lower(): o["value"] for o in options}
+
+    parts = [p.strip() for p in str_value.split(",")] if frontend_input == "multiselect" else [str_value]
+
+    resolved: list[str] = []
+    for part in parts:
+        if part.isdigit():
+            resolved.append(part)
+            continue
+        matched_id = option_map.get(part.lower())
+        if matched_id is None:
+            available = ", ".join(f"'{o['label']}' → {o['value']}" for o in options)
+            raise ValueError(
+                f"No option matching '{part}' for attribute '{attribute_code}' "
+                f"(type: {frontend_input}). Available: {available}"
+            )
+        resolved.append(matched_id)
+
+    return ",".join(resolved) if frontend_input == "multiselect" else resolved[0]
+
+
+# ---------------------------------------------------------------------------
 # Tool implementations
 # ---------------------------------------------------------------------------
 
@@ -210,7 +308,7 @@ async def admin_search_products(
 async def admin_get_product(
     sku: str,
     store_scope: str = "default",
-) -> dict[str, Any]:
+) -> ProductDetail:
     """Get full product detail by SKU — all attributes, media, stock, options."""
     log.info("admin_get_product sku=%s store=%s", sku, store_scope)
 
@@ -224,23 +322,50 @@ async def admin_get_product(
     return result.model_dump(mode="json")
 
 
+# Top-level product fields that live on the product object directly (not EAV).
+# Everything else is an EAV custom_attribute.
+_TOP_LEVEL_PRODUCT_FIELDS = frozenset({"name", "price", "status", "weight"})
+
+
 async def admin_update_product(
     sku: str,
     name: str | None = None,
     price: float | None = None,
+    special_price: float | None = None,
+    special_price_from: str | None = None,
+    special_price_to: str | None = None,
     status: int | None = None,
     weight: float | None = None,
     description: str | None = None,
     short_description: str | None = None,
     meta_title: str | None = None,
     meta_description: str | None = None,
+    attributes: dict[str, Any] | None = None,
     confirm: bool = False,
     store_scope: str = "default",
+    ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Update product attributes. Only specified fields are changed. Requires confirmation."""
+    """Update product attributes. Only specified fields are changed. Requires confirmation.
+
+    Named shortcuts cover the most common fields. For any other EAV attribute
+    (e.g. color, material, manufacturer, custom fields) pass them in ``attributes``
+    as ``{"attribute_code": value}``.
+
+    Value handling by attribute type:
+    - select / multiselect / swatch_visual / swatch_text: you may pass either the
+      human-readable label (e.g. "Red") or the numeric option ID (e.g. "59").
+      Labels are automatically resolved to option IDs via the Magento API.
+    - boolean: accepts Yes/No, True/False, or "1"/"0" — normalised to "1"/"0".
+    - text, textarea, date, price, etc.: plain value passed through unchanged.
+
+    special_price sets a promotional / sale price that appears alongside the regular price.
+    Pair with special_price_from / special_price_to (YYYY-MM-DD) to schedule the sale.
+    Pass special_price=None explicitly with confirm=True to clear an existing special price
+    (Magento interprets an empty string as removal).
+    """
     log.info("admin_update_product sku=%s confirm=%s", sku, confirm)
 
-    prompt = needs_confirmation(f"update product {sku}", sku, confirm)
+    prompt = await elicit_confirmation(ctx, f"update product {sku}", sku, confirm)
     if prompt:
         return prompt
 
@@ -255,35 +380,137 @@ async def admin_update_product(
     if weight is not None:
         product["weight"] = weight
 
-    # Text attributes go in custom_attributes
+    # Attributes stored in custom_attributes (EAV): named shortcuts + generic dict
     custom_attributes: list[dict[str, Any]] = []
     for attr_code, value in [
         ("description", description),
         ("short_description", short_description),
         ("meta_title", meta_title),
         ("meta_description", meta_description),
+        ("special_price", str(special_price) if special_price is not None else None),
+        ("special_from_date", special_price_from),
+        ("special_to_date", special_price_to),
     ]:
         if value is not None:
             custom_attributes.append({"attribute_code": attr_code, "value": value})
 
+    # Generic attributes — any EAV attribute_code not covered by named params.
+    # select / multiselect / swatch types store integer option IDs; non-numeric values
+    # are auto-resolved to the matching option ID via a GET /V1/products/attributes/{code}.
+    # boolean values are normalised to "1"/"0". All other types pass through unchanged.
+    if attributes:
+        for attr_code, value in attributes.items():
+            if value is not None:
+                resolved = await _resolve_eav_value(attr_code, value, store_code=store_scope)
+                custom_attributes.append({"attribute_code": attr_code, "value": resolved})
+
     if custom_attributes:
         product["custom_attributes"] = custom_attributes
 
-    updated_fields = [k for k in product if k != "sku"] + [
+    updated_fields = [k for k in product if k not in ("sku", "custom_attributes")] + [
         ca["attribute_code"] for ca in custom_attributes
     ]
 
     if not updated_fields:
         raise ValueError("No fields to update. Provide at least one field to change.")
 
+    def _extract_fields(
+        raw: dict[str, Any], fields: list[str]
+    ) -> dict[str, Any]:
+        """Extract updated fields from a raw product response."""
+        attrs = {
+            item["attribute_code"]: item.get("value")
+            for item in (raw.get("custom_attributes") or [])
+            if "attribute_code" in item
+        }
+        result: dict[str, Any] = {}
+        for field in fields:
+            if field in _TOP_LEVEL_PRODUCT_FIELDS:
+                result[field] = raw.get(field)
+            else:
+                result[field] = attrs.get(field)
+        return result
+
+    # Optionally capture before-state for audit purposes.
+    # Controlled by MAGEMCP_AUDIT_BEFORE_STATE=true (default: false) to avoid
+    # an extra GET call on every write when not needed.
+    before: dict[str, Any] | None = None
+    if os.getenv("MAGEMCP_AUDIT_BEFORE_STATE", "false").lower() == "true":
+        try:
+            async with RESTClient.from_env() as client:
+                raw_before = await client.get(f"/V1/products/{sku}", store_code=store_scope)
+            before = _extract_fields(raw_before, updated_fields)
+        except Exception as exc:
+            log.warning("admin_update_product: could not fetch before-state for %s: %s", sku, exc)
+
     async with RESTClient.from_env() as client:
-        await client.put(
+        raw_after = await client.put(
             f"/V1/products/{sku}",
             json={"product": product},
             store_code=store_scope,
         )
 
-    return {"success": True, "sku": sku, "updated_fields": updated_fields}
+    after: dict[str, Any] = {}
+    if raw_after and isinstance(raw_after, dict):
+        after = _extract_fields(raw_after, updated_fields)
+
+    result: dict[str, Any] = {
+        "success": True,
+        "sku": sku,
+        "updated_fields": updated_fields,
+    }
+    if before is not None:
+        result["before"] = before
+    if after:
+        result["after"] = after
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Attribute lookup
+# ---------------------------------------------------------------------------
+
+
+async def admin_get_product_attribute(
+    attribute_code: str,
+) -> dict[str, Any]:
+    """Return the definition of a product EAV attribute, including its option list.
+
+    For ``select`` and ``multiselect`` attributes Magento stores integer option IDs,
+    not label text.  Use this tool to map a human-readable label (e.g. "Red") to the
+    correct option value ID before calling ``admin_update_product``.
+
+    Workflow::
+
+        # 1. Find the option ID for "Red"
+        attr = await admin_get_product_attribute("color")
+        # → {"frontend_input": "select", "options": [{"label": "Red", "value": "59"}, ...]}
+
+        # 2. Update using the ID, not the label
+        await admin_update_product(sku="24-MB01", attributes={"color": "59"}, confirm=True)
+    """
+    log.info("admin_get_product_attribute attribute_code=%s", attribute_code)
+
+    async with RESTClient.from_env() as client:
+        raw = await client.get(f"/V1/products/attributes/{attribute_code}")
+
+    if not raw or "attribute_code" not in raw:
+        raise MagentoNotFoundError(f"Attribute '{attribute_code}' not found.")
+
+    # Strip the empty placeholder option Magento always inserts at position 0
+    raw_options: list[dict[str, Any]] = raw.get("options") or []
+    options = [o for o in raw_options if o.get("value") not in ("", None)]
+
+    return {
+        "attribute_code": raw["attribute_code"],
+        "attribute_id": raw.get("attribute_id"),
+        "frontend_label": raw.get("default_frontend_label") or attribute_code,
+        "frontend_input": raw.get("frontend_input"),  # select, multiselect, text, date, boolean …
+        "is_required": raw.get("is_required", False),
+        "is_user_defined": raw.get("is_user_defined", False),
+        "scope": raw.get("scope"),  # global, website, store
+        "options": options,  # [{label, value}, …] — empty for non-select types
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -298,9 +525,10 @@ def register_product_tools(mcp: FastMCP) -> None:
         name="admin_search_products",
         title="Search Products",
         description=(
-            "Search products by name, SKU, type, status, visibility, or price range. "
-            "Name and SKU filters support wildcards (e.g. %duffle%). "
-            "Returns product summaries. Use admin_get_product for full detail."
+            "Search the admin product catalog by name, SKU, type (simple/configurable/bundle), "
+            "status (1=enabled, 2=disabled), or price range. "
+            "Name and SKU filters support wildcards (e.g. %duffle%, MH%). "
+            "Returns summaries — use admin_get_product for full attribute detail."
         ),
         annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
     )(admin_search_products)
@@ -309,19 +537,43 @@ def register_product_tools(mcp: FastMCP) -> None:
         name="admin_get_product",
         title="Get Product",
         description=(
-            "Get full product detail by SKU: all attributes, descriptions, media gallery, "
-            "stock item, tier prices, customizable options, and category links."
+            "Get complete product data by SKU (admin REST view): all EAV attributes, "
+            "descriptions, images, stock item with raw warehouse quantity, tier prices, "
+            "customizable options, and category assignments. "
+            "For storefront-visible pricing and stock use c_get_product."
         ),
         annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
     )(admin_get_product)
 
     mcp.tool(
+        name="admin_get_product_attribute",
+        title="Get Product Attribute",
+        description=(
+            "Return the definition and option list for a product EAV attribute. "
+            "Essential before updating select/multiselect attributes (color, material, "
+            "manufacturer, etc.): Magento stores these as integer option IDs, not labels. "
+            "Call this first to map 'Red' → '59', then pass the ID to admin_update_product. "
+            "Also shows frontend_input type (select, multiselect, text, date, boolean, price) "
+            "and scope (global, website, store)."
+        ),
+        annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
+    )(admin_get_product_attribute)
+
+    mcp.tool(
         name="admin_update_product",
         title="Update Product",
         description=(
-            "Update product attributes (name, price, status, weight, descriptions, meta fields). "
-            "Only specified fields are changed — omitted fields are untouched. "
-            "Requires confirmation — call with confirm=True to proceed."
+            "Update product attributes by SKU. Named shortcuts: name, price, "
+            "special_price (sale price shown alongside regular price), "
+            "special_price_from / special_price_to (YYYY-MM-DD schedule), "
+            "status (1=enabled, 2=disabled), weight, short/long description, meta fields. "
+            "For any other EAV attribute pass attributes={\"attribute_code\": value}. "
+            "select/multiselect/swatch attributes accept either a label ('Red') or the "
+            "numeric option ID ('59') — labels are auto-resolved via the Magento API. "
+            "boolean attributes accept Yes/No or 1/0. Text/date/price pass through unchanged. "
+            "Only fields you provide are changed. "
+            "Requires confirmation — call twice with confirm=True. Use admin_get_product first "
+            "to see current values."
         ),
         annotations={"readOnlyHint": False, "destructiveHint": True, "idempotentHint": False, "openWorldHint": True},
     )(admin_update_product)

@@ -131,17 +131,62 @@ def _parse_response(data: dict[str, Any]) -> CGetCategoriesOutput:
 # ---------------------------------------------------------------------------
 
 
+async def c_get_categories(
+    parent_id: str | None = None,
+    name: str | None = None,
+    include_in_menu: bool | None = None,
+    store_scope: str = "default",
+    page_size: int = 20,
+    current_page: int = 1,
+) -> CGetCategoriesOutput:
+    """Get the category tree."""
+    inp = CGetCategoriesInput(
+        parent_id=parent_id,
+        name=name,
+        include_in_menu=include_in_menu,
+        store_scope=store_scope,
+        page_size=page_size,
+        current_page=current_page,
+    )
+
+    variables = _build_variables(inp)
+    cache_key = (
+        f"categories:{inp.store_scope}:{inp.parent_id}:{inp.name}:"
+        f"{inp.include_in_menu}:{inp.page_size}:{inp.current_page}"
+    )
+    cached = _cache.get(cache_key)
+    if cached is not None:
+        log.debug("c_get_categories cache hit store=%s", inp.store_scope)
+        return cached
+
+    log.info("c_get_categories store=%s variables=%s", inp.store_scope, variables)
+
+    async with GraphQLClient.from_env() as client:
+        data = await client.query(
+            GET_CATEGORIES_QUERY,
+            variables=variables,
+            store_code=inp.store_scope,
+        )
+
+    result = _parse_response(data)
+    dumped = result.model_dump(mode="json")
+    _cache.set(cache_key, dumped)
+    return dumped
+
+
 def register_get_categories(mcp: FastMCP) -> None:
     """Register the c_get_categories tool on the given MCP server."""
-
-    @mcp.tool(
+    mcp.tool(
         name="c_get_categories",
         title="Get Categories",
         description=(
-            "Fetch the category tree as a shopper would see it. "
-            "Returns categories with nested children (up to 3 levels), "
-            "product counts, and menu visibility. "
-            "Filter by parent category, name, or menu inclusion."
+            "Get the storefront category tree (up to 3 levels deep). "
+            "Use to answer 'what product categories do you have?' or to find category_id values "
+            "for filtering c_search_products. "
+            "Returns each category's uid, name, url_path, product_count, and include_in_menu flag. "
+            "Filter by parent_id to navigate subtrees, name (partial match) to find a specific category, "
+            "or include_in_menu=True to list only navigation menu categories. "
+            "Results are cached for 5 minutes."
         ),
         annotations={
             "readOnlyHint": True,
@@ -149,45 +194,4 @@ def register_get_categories(mcp: FastMCP) -> None:
             "idempotentHint": True,
             "openWorldHint": True,
         },
-    )
-    async def c_get_categories(
-        parent_id: str | None = None,
-        name: str | None = None,
-        include_in_menu: bool | None = None,
-        store_scope: str = "default",
-        page_size: int = 20,
-        current_page: int = 1,
-    ) -> dict[str, Any]:
-        """Get the category tree."""
-        inp = CGetCategoriesInput(
-            parent_id=parent_id,
-            name=name,
-            include_in_menu=include_in_menu,
-            store_scope=store_scope,
-            page_size=page_size,
-            current_page=current_page,
-        )
-
-        variables = _build_variables(inp)
-        cache_key = (
-            f"categories:{inp.store_scope}:{inp.parent_id}:{inp.name}:"
-            f"{inp.include_in_menu}:{inp.page_size}:{inp.current_page}"
-        )
-        cached = _cache.get(cache_key)
-        if cached is not None:
-            log.debug("c_get_categories cache hit store=%s", inp.store_scope)
-            return cached
-
-        log.info("c_get_categories store=%s variables=%s", inp.store_scope, variables)
-
-        async with GraphQLClient.from_env() as client:
-            data = await client.query(
-                GET_CATEGORIES_QUERY,
-                variables=variables,
-                store_code=inp.store_scope,
-            )
-
-        result = _parse_response(data)
-        dumped = result.model_dump(mode="json")
-        _cache.set(cache_key, dumped)
-        return dumped
+    )(c_get_categories)
