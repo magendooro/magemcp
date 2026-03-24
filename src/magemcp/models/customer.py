@@ -2,9 +2,45 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
+
+
+# ---------------------------------------------------------------------------
+# Shared sub-models
+# ---------------------------------------------------------------------------
+
+
+class CustomerAddress(BaseModel):
+    """A customer address record as returned by the Magento REST API."""
+
+    id: int | None = None
+    firstname: str | None = None
+    lastname: str | None = None
+    street: list[str] = Field(default_factory=list)
+    city: str | None = None
+    region: str | None = None
+    region_code: str | None = None
+    postcode: str | None = None
+    country_id: str | None = None
+    telephone: str | None = None
+    default_billing: bool = False
+    default_shipping: bool = False
+
+
+class CustomerSummary(BaseModel):
+    """Lean customer record returned by admin_search_customers."""
+
+    customer_id: int
+    email: str | None = None
+    firstname: str | None = None
+    lastname: str | None = None
+    group_id: int | None = None
+    store_id: int | None = None
+    website_id: int | None = None
+    created_at: str | None = None
+    is_active: bool = True
 
 
 # ---------------------------------------------------------------------------
@@ -86,5 +122,10 @@ class CGetCustomerOutput(BaseModel):
     is_active: bool = True
     default_billing_id: str | None = None
     default_shipping_id: str | None = None
+
+    # Extended fields (admin view)
+    addresses: list[CustomerAddress] = Field(default_factory=list)
+    custom_attributes: dict[str, Any] = Field(default_factory=dict)
+    extension_attributes: dict[str, Any] = Field(default_factory=dict)
 
     pii_mode: str = "redacted"
